@@ -1,4 +1,4 @@
-# One-shot migration runner. Re-applies every deploy; alembic is idempotent.
+# Migration job runs to completion every deploy (alembic is idempotent).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,11 +23,35 @@ metadata:
   name: backend
   namespace: social
 spec:
-  replicas: 2
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0    # always keep full capacity during a deploy
+      maxSurge: 1
   selector: { matchLabels: { app: backend } }
   template:
-    metadata: { labels: { app: backend } }
+    metadata:
+      labels: { app: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
     spec:
+      # Give the pod time to drain in-flight requests before SIGKILL.
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app: backend } }
+      affinity:
+        podAntiAffinity:
+          # Soft preference: spread replicas across nodes.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: { matchLabels: { app: backend } }
       containers:
         - name: backend
           image: ghcr.io/your-org/social-backend:latest
@@ -35,14 +59,31 @@ spec:
           envFrom:
             - configMapRef: { name: social-config }
             - secretRef: { name: social-secret }
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://jaeger:4318
+            - name: OTEL_SERVICE_NAME
+              value: social-backend
           readinessProbe:
-            httpGet: { path: /health, port: 8000 }
+            httpGet: { path: /ready, port: 8000 }
             initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 20
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          startupProbe:
+            httpGet: { path: /health, port: 8000 }
+            failureThreshold: 30
+            periodSeconds: 2
+          lifecycle:
+            preStop:
+              # Let LB drop us from the pool before we start refusing new conns.
+              exec: { command: ["sh", "-c", "sleep 10"] }
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            requests: { cpu: 200m, memory: 256Mi }
             limits: { cpu: 1, memory: 1Gi }
 ---
 apiVersion: v1
@@ -54,27 +95,14 @@ spec:
   selector: { app: backend }
   ports: [{ port: 80, targetPort: 8000 }]
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: policy/v1
+kind: PodDisruptionBudget
 metadata:
-  name: events-worker
+  name: backend-pdb
   namespace: social
 spec:
-  replicas: 1
-  selector: { matchLabels: { app: events-worker } }
-  template:
-    metadata: { labels: { app: events-worker } }
-    spec:
-      containers:
-        - name: worker
-          image: ghcr.io/your-org/social-backend:latest
-          command: ["python", "-m", "app.workers.events_consumer"]
-          envFrom:
-            - configMapRef: { name: social-config }
-            - secretRef: { name: social-secret }
-          resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+  minAvailable: 2
+  selector: { matchLabels: { app: backend } }
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -86,10 +114,91 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: backend
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 3
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
         name: cpu
-        target: { type: Utilization, averageUtilization: 70 }
+        target: { type: Utilization, averageUtilization: 60 }
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: 75 }
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - { type: Percent, value: 100, periodSeconds: 30 }
+---
+# Each worker is its own deployment so it scales and fails independently
+# of the HTTP path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: events-worker
+  namespace: social
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: events-worker } }
+  template:
+    metadata: { labels: { app: events-worker } }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/social-backend:latest
+          command: ["python", "-m", "app.workers.events_consumer"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1, memory: 1Gi }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: events-worker-pdb, namespace: social }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: events-worker } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transcode-worker
+  namespace: social
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: transcode-worker } }
+  template:
+    metadata: { labels: { app: transcode-worker } }
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/social-backend:latest
+          command: ["python", "-m", "app.workers.transcode_worker"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          # ffmpeg is CPU and RAM heavy; tune for your media sizes.
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 3Gi }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: transcode-worker-hpa, namespace: social }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: transcode-worker
+  minReplicas: 2
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

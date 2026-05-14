@@ -3,10 +3,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.kafka_client import publish
 from app.models import Comment, Post, User
 from app.schemas.comment import CommentCreate, CommentOut
-
 
 router = APIRouter(tags=["comments"])
 
@@ -39,8 +40,12 @@ def list_comments(
     return [_to_comment_out(db, c) for c in db.execute(stmt).scalars()]
 
 
-@router.post("/posts/{post_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED)
-def add_comment(
+@router.post(
+    "/posts/{post_id}/comments",
+    response_model=CommentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_comment(
     post_id: int,
     payload: CommentCreate,
     db: Session = Depends(get_db),
@@ -52,6 +57,21 @@ def add_comment(
     db.add(comment)
     db.commit()
     db.refresh(comment)
+
+    try:
+        await publish(
+            settings.kafka_events_topic,
+            {
+                "type": "comment.created",
+                "comment_id": comment.id,
+                "post_id": post_id,
+                "author_id": current.id,
+            },
+            key=str(post_id),
+        )
+    except Exception:
+        pass  # bus down ≠ write failure; the comment is already saved
+
     return _to_comment_out(db, comment)
 
 

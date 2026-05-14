@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.redis_client import get_redis
 from app.models import Friendship, FriendshipStatus, Like, Post, Comment
 
-
 FRIEND_IDS_CACHE_TTL = 60  # seconds
 
 
@@ -45,7 +44,11 @@ async def invalidate_friend_cache(*user_ids: int) -> None:
 
 
 def fetch_posts(
-    db: Session, viewer_id: int, author_ids: list[int], limit: int, before_id: int | None
+    db: Session,
+    viewer_id: int,
+    author_ids: list[int],
+    limit: int,
+    before_id: int | None,
 ) -> list[dict]:
     if not author_ids:
         return []
@@ -60,11 +63,7 @@ def fetch_posts(
         .group_by(Comment.post_id)
         .subquery()
     )
-    liked_by_me = (
-        select(Like.post_id)
-        .where(Like.user_id == viewer_id)
-        .subquery()
-    )
+    liked_by_me = select(Like.post_id).where(Like.user_id == viewer_id).subquery()
 
     stmt = (
         select(
@@ -89,6 +88,7 @@ def fetch_posts(
     # Eager-load authors in one query
     author_ids_seen = {row[0].author_id for row in rows}
     from app.models import User
+
     authors = {
         u.id: u
         for u in db.execute(select(User).where(User.id.in_(author_ids_seen))).scalars()

@@ -21,7 +21,6 @@ from app.core.kafka_client import publish
 from app.core.mongo import get_mongo_db
 from app.models import ChatRoom, ChatRoomMember
 
-
 COLLECTION = "messages"
 
 
@@ -33,7 +32,12 @@ def is_member(db: Session, room_id: int, user_id: int) -> bool:
 
 
 async def persist_and_fan_out(
-    *, room_id: int, sender_id: int, content: str, media_url: str | None, media_type: str | None
+    *,
+    room_id: int,
+    sender_id: int,
+    content: str,
+    media_url: str | None,
+    media_type: str | None
 ) -> dict[str, Any]:
     doc = {
         "room_id": room_id,
@@ -52,7 +56,9 @@ async def persist_and_fan_out(
     return payload
 
 
-async def list_history(room_id: int, limit: int = 50, before_id: str | None = None) -> list[dict]:
+async def list_history(
+    room_id: int, limit: int = 50, before_id: str | None = None
+) -> list[dict]:
     mongo = get_mongo_db()
     query: dict[str, Any] = {"room_id": room_id}
     if before_id:
@@ -69,7 +75,11 @@ def _serialize(doc: dict) -> dict:
         "content": doc.get("content", ""),
         "media_url": doc.get("media_url"),
         "media_type": doc.get("media_type"),
-        "created_at": doc["created_at"].isoformat() if isinstance(doc["created_at"], datetime) else doc["created_at"],
+        "created_at": (
+            doc["created_at"].isoformat()
+            if isinstance(doc["created_at"], datetime)
+            else doc["created_at"]
+        ),
     }
 
 

@@ -4,12 +4,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.kafka_client import publish
 from app.models import Friendship, FriendshipStatus, User
 from app.schemas.friend import FriendRequestOut
 from app.schemas.user import UserPublic
 from app.services.feed_service import get_friend_ids, invalidate_friend_cache
-
 
 router = APIRouter(prefix="/friends", tags=["friends"])
 
@@ -24,7 +25,11 @@ def _to_friendship_out(db: Session, f: Friendship) -> dict:
     }
 
 
-@router.post("/requests/{user_id}", response_model=FriendRequestOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/requests/{user_id}",
+    response_model=FriendRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def send_request(
     user_id: int,
     db: Session = Depends(get_db),
@@ -73,6 +78,14 @@ async def accept_request(
     f.status = FriendshipStatus.ACCEPTED
     db.commit()
     await invalidate_friend_cache(f.requester_id, f.addressee_id)
+    try:
+        await publish(
+            settings.kafka_events_topic,
+            {"type": "friend.accepted", "a": f.requester_id, "b": f.addressee_id},
+            key=str(f.requester_id),
+        )
+    except Exception:
+        pass
     return _to_friendship_out(db, f)
 
 

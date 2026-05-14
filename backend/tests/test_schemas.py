@@ -6,14 +6,23 @@ from app.schemas.post import MediaIn, PostCreate
 
 
 def test_register_validation() -> None:
-    r = RegisterIn(email="a@b.com", username="alice", display_name="Alice", password="longenough")
+    r = RegisterIn(
+        email="a@b.com", username="alice", display_name="Alice", password="longenough"
+    )
     assert r.username == "alice"
 
     with pytest.raises(ValidationError):
-        RegisterIn(email="a@b.com", username="alice", display_name="Alice", password="short")
+        RegisterIn(
+            email="a@b.com", username="alice", display_name="Alice", password="short"
+        )
 
     with pytest.raises(ValidationError):
-        RegisterIn(email="not-an-email", username="alice", display_name="Alice", password="longenough")
+        RegisterIn(
+            email="not-an-email",
+            username="alice",
+            display_name="Alice",
+            password="longenough",
+        )
 
 
 def test_post_media_type() -> None:

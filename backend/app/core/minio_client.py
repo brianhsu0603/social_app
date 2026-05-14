@@ -4,7 +4,6 @@ from minio.error import S3Error
 
 from app.core.config import settings
 
-
 _client: Minio | None = None
 
 

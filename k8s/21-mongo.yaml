@@ -1,11 +1,15 @@
+# 3-member Mongo replica set: one primary, two secondaries.
+# Survives one node loss with no read/write impact. Needs the user to run
+# `rs.initiate(...)` once after first deploy — see scripts/init-mongo-rs.sh.
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: Service
 metadata:
-  name: mongo-data
+  name: mongo
   namespace: social
 spec:
-  accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 5Gi } }
+  clusterIP: None
+  selector: { app: mongo }
+  ports: [{ port: 27017, targetPort: 27017 }]
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -14,27 +18,39 @@ metadata:
   namespace: social
 spec:
   serviceName: mongo
-  replicas: 1
+  replicas: 3
   selector: { matchLabels: { app: mongo } }
   template:
     metadata: { labels: { app: mongo } }
     spec:
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: { matchLabels: { app: mongo } }
       containers:
         - name: mongo
           image: mongo:7
+          args: ["--replSet", "rs0", "--bind_ip_all"]
           ports: [{ containerPort: 27017 }]
           volumeMounts:
-            - name: data
-              mountPath: /data/db
-      volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: mongo-data }
+            - { name: data, mountPath: /data/db }
+          readinessProbe:
+            exec: { command: ["mongosh", "--eval", "db.adminCommand('ping').ok"] }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 10Gi } }
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: mongo
-  namespace: social
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: mongo-pdb, namespace: social }
 spec:
-  selector: { app: mongo }
-  ports: [{ port: 27017, targetPort: 27017 }]
+  minAvailable: 2     # never lose the quorum
+  selector: { matchLabels: { app: mongo } }

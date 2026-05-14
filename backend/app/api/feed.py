@@ -7,7 +7,6 @@ from app.models import User
 from app.schemas.post import PostOut
 from app.services.feed_service import fetch_posts, get_friend_ids
 
-
 router = APIRouter(prefix="/feed", tags=["feed"])
 
 

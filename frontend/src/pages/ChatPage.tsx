@@ -90,7 +90,7 @@ export default function ChatPage() {
         <ul className="space-y-1 mb-4">
           {roomsQ.data?.map((r) => {
             const others = r.members.filter((u) => u.id !== me?.id);
-            const label = r.name ?? others.map((u) => u.display_name).join(", ") || "Chat";
+            const label = r.name ?? (others.map((u) => u.display_name).join(", ") || "Chat");
             return (
               <li key={r.id}>
                 <button

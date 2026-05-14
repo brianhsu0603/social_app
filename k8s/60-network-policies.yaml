@@ -1,0 +1,74 @@
+# Default deny everything ingress; whitelist explicit flows.
+# Requires a CNI that enforces NetworkPolicies (Calico, Cilium, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: social
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Backend accepts traffic only from the ingress controller and other backend pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-backend, namespace: social }
+spec:
+  podSelector: { matchLabels: { app: backend } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+        - podSelector: { matchLabels: { app: backend } }
+      ports:
+        - { port: 8000, protocol: TCP }
+---
+# Datastores: backend + workers only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-postgres, namespace: social }
+spec:
+  podSelector: { matchLabels: { app: postgres } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: backend } }
+        - podSelector: { matchLabels: { app: events-worker } }
+        - podSelector: { matchLabels: { app: transcode-worker } }
+      ports: [{ port: 5432, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-mongo, namespace: social }
+spec:
+  podSelector: { matchLabels: { app: mongo } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: backend } }
+        - podSelector: { matchLabels: { app: events-worker } }
+      ports: [{ port: 27017, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-redis, namespace: social }
+spec:
+  podSelector: { matchLabels: { app: redis } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: backend } }
+        - podSelector: { matchLabels: { app: events-worker } }
+      ports: [{ port: 6379, protocol: TCP }]
+---
+# Frontend is the public face. Anything in the cluster can reach it (debugging),
+# but external traffic still has to go through the ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-frontend, namespace: social }
+spec:
+  podSelector: { matchLabels: { app: frontend } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{}]
+      ports: [{ port: 80, protocol: TCP }]

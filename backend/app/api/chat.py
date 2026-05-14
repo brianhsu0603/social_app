@@ -1,22 +1,39 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+import asyncio
+import json
+import logging
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, user_from_token
 from app.core.database import SessionLocal, get_db
+from app.core.observability import WS_CONNECTIONS
+from app.core.redis_client import get_redis
 from app.models import ChatRoom, ChatRoomMember, User
 from app.schemas.chat import ChatMessageIn, ChatMessageOut, ChatRoomCreate, ChatRoomOut
-from app.services import chat_service
+from app.services import chat_service, presence_service
 from app.services.ws_manager import manager
 
-
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def _room_with_members(db: Session, room: ChatRoom) -> dict:
-    member_ids = db.execute(
-        select(ChatRoomMember.user_id).where(ChatRoomMember.room_id == room.id)
-    ).scalars().all()
+    member_ids = (
+        db.execute(
+            select(ChatRoomMember.user_id).where(ChatRoomMember.room_id == room.id)
+        )
+        .scalars()
+        .all()
+    )
     members = list(db.execute(select(User).where(User.id.in_(member_ids))).scalars())
     return {
         "id": room.id,
@@ -37,7 +54,6 @@ def create_room(
     member_ids = sorted(set(payload.member_ids) | {current.id})
     is_group = len(member_ids) > 2
 
-    # For 1:1 chats, reuse an existing room with the same two members if present.
     if not is_group and len(member_ids) == 2:
         existing = db.execute(
             select(ChatRoom)
@@ -64,12 +80,18 @@ def list_my_rooms(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
-    room_ids = db.execute(
-        select(ChatRoomMember.room_id).where(ChatRoomMember.user_id == current.id)
-    ).scalars().all()
+    room_ids = (
+        db.execute(
+            select(ChatRoomMember.room_id).where(ChatRoomMember.user_id == current.id)
+        )
+        .scalars()
+        .all()
+    )
     if not room_ids:
         return []
-    rooms = list(db.execute(select(ChatRoom).where(ChatRoom.id.in_(room_ids))).scalars())
+    rooms = list(
+        db.execute(select(ChatRoom).where(ChatRoom.id.in_(room_ids))).scalars()
+    )
     rooms.sort(key=lambda r: r.id, reverse=True)
     return [_room_with_members(db, r) for r in rooms]
 
@@ -87,14 +109,17 @@ async def history(
     return await chat_service.list_history(room_id, limit=limit, before_id=before_id)
 
 
-@router.post("/rooms/{room_id}/messages", response_model=ChatMessageOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/rooms/{room_id}/messages",
+    response_model=ChatMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
 async def send_message_rest(
     room_id: int,
     payload: ChatMessageIn,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    """REST fallback for clients that aren't using WebSockets."""
     if payload.room_id != room_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "room_id mismatch")
     if not chat_service.is_member(db, room_id, current.id):
@@ -120,9 +145,22 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
         db.close()
 
     await manager.connect(room_id, websocket)
+    WS_CONNECTIONS.labels("chat").inc()
+    await presence_service.mark_online(user.id)
+
+    stop_event = asyncio.Event()
+    heartbeat = asyncio.create_task(
+        presence_service.heartbeat_loop(user.id, stop_event)
+    )
+    typing_task = asyncio.create_task(_subscribe_typing(room_id, websocket, stop_event))
+
     try:
         while True:
             payload = await websocket.receive_json()
+            kind = payload.get("type", "message")
+            if kind == "typing":
+                await presence_service.publish_typing(room_id, user.id)
+                continue
             await chat_service.persist_and_fan_out(
                 room_id=room_id,
                 sender_id=user.id,
@@ -130,10 +168,36 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
                 media_url=payload.get("media_url"),
                 media_type=payload.get("media_type"),
             )
-            # Note: we don't echo here; the Kafka consumer will deliver to all
-            # connected sockets (including this one) so every client sees the
-            # exact persisted record with its server-assigned id.
     except WebSocketDisconnect:
         pass
+    except Exception:
+        log.exception("ws error")
     finally:
+        stop_event.set()
+        heartbeat.cancel()
+        typing_task.cancel()
         await manager.disconnect(room_id, websocket)
+        WS_CONNECTIONS.labels("chat").dec()
+        await presence_service.mark_offline(user.id)
+
+
+async def _subscribe_typing(
+    room_id: int, ws: WebSocket, stop_event: asyncio.Event
+) -> None:
+    """Bridge Redis typing channel → this socket. One pubsub task per socket
+    is wasteful at huge scale; for now it keeps the code simple."""
+    redis = get_redis()
+    pubsub = redis.pubsub()
+    await pubsub.subscribe(presence_service.TYPING_CHANNEL.format(room_id=room_id))
+    try:
+        while not stop_event.is_set():
+            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if msg and msg.get("type") == "message":
+                try:
+                    payload = json.loads(msg["data"])
+                except Exception:
+                    continue
+                await ws.send_json({"type": "typing", **payload})
+    finally:
+        await pubsub.unsubscribe()
+        await pubsub.close()

@@ -1,5 +1,5 @@
 # Local development stack. `docker compose up --build` brings up the whole app.
-# Run migrations once with: docker compose run --rm backend alembic upgrade head
+# Run migrations once: docker compose run --rm backend alembic upgrade head
 
 services:
   postgres:
@@ -23,22 +23,28 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
 
-  # Single-broker KRaft Kafka (no Zookeeper). Fine for local dev.
+  # Single-broker KRaft Kafka for dev. K8s uses a 3-broker Strimzi cluster instead.
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.8.0
     ports: ["9092:9092"]
     environment:
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
 
   minio:
     image: minio/minio:latest
@@ -51,8 +57,6 @@ services:
       - "9001:9001"
     volumes: ["minio_data:/data"]
 
-  # Bootstrap the media bucket and make it publicly readable so the frontend
-  # can serve uploaded images/videos directly.
   minio-init:
     image: minio/mc:latest
     depends_on: [minio]
@@ -64,6 +68,34 @@ services:
       mc anonymous set download local/${MINIO_BUCKET:-media}
       "
 
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
+    ports: ["7700:7700"]
+    volumes: ["meili_data:/meili_data"]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    ports:
+      - "16686:16686"   # UI
+      - "4318:4318"     # OTLP HTTP
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+
   backend:
     build: ./backend
     env_file: .env
@@ -74,12 +106,17 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: social-backend
     depends_on:
       postgres: { condition: service_healthy }
       mongo: { condition: service_started }
       redis: { condition: service_started }
       kafka: { condition: service_started }
       minio: { condition: service_started }
+      meilisearch: { condition: service_started }
     ports: ["8000:8000"]
     volumes: ["./backend:/app"]
     command: >
@@ -91,9 +128,26 @@ services:
     env_file: .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-social}:${POSTGRES_PASSWORD:-social}@postgres:5432/${POSTGRES_DB:-social}
+      REDIS_URL: redis://redis:6379/0
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-masterKey}
     depends_on:
       kafka: { condition: service_started }
     command: ["python", "-m", "app.workers.events_consumer"]
+    volumes: ["./backend:/app"]
+
+  transcode-worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+    depends_on:
+      kafka: { condition: service_started }
+      minio: { condition: service_started }
+    command: ["python", "-m", "app.workers.transcode_worker"]
     volumes: ["./backend:/app"]
 
   frontend:
@@ -110,4 +164,6 @@ services:
 volumes:
   pg_data:
   mongo_data:
+  redis_data:
   minio_data:
+  meili_data:

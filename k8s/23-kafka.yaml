@@ -1,53 +1,159 @@
-# Single-broker KRaft Kafka. For production use Strimzi or a managed service;
-# this manifest exists so the app stack can run end-to-end on a dev cluster.
-apiVersion: v1
-kind: PersistentVolumeClaim
+# Production-shape Kafka via the Strimzi operator (recommended).
+#
+# Install Strimzi once per cluster:
+#   kubectl create namespace strimzi
+#   kubectl -n strimzi apply -f \
+#     'https://strimzi.io/install/latest?namespace=strimzi'
+#
+# Then `kubectl apply -f k8s/23-kafka.yaml` to spin up a 3-broker KRaft
+# cluster with rack awareness, anti-affinity, and replicated topics.
+#
+# For local dev (docker-compose), a single broker is fine — see compose.
+
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
 metadata:
-  name: kafka-data
+  name: dual-role
   namespace: social
+  labels:
+    strimzi.io/cluster: social
 spec:
-  accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 5Gi } }
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: kafka
-  namespace: social
-spec:
-  serviceName: kafka
-  replicas: 1
-  selector: { matchLabels: { app: kafka } }
+  replicas: 3
+  roles: [controller, broker]
+  storage:
+    type: persistent-claim
+    size: 50Gi
+    deleteClaim: false
+  resources:
+    requests: { memory: 1Gi, cpu: 500m }
+    limits: { memory: 2Gi, cpu: "2" }
   template:
-    metadata: { labels: { app: kafka } }
-    spec:
-      containers:
-        - name: kafka
-          image: bitnami/kafka:3.7
-          ports:
-            - containerPort: 9092
-          env:
-            - { name: KAFKA_CFG_NODE_ID, value: "1" }
-            - { name: KAFKA_CFG_PROCESS_ROLES, value: "broker,controller" }
-            - { name: KAFKA_CFG_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093" }
-            - { name: KAFKA_CFG_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
-            - { name: KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP, value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT" }
-            - { name: KAFKA_CFG_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER" }
-            - { name: KAFKA_CFG_CONTROLLER_QUORUM_VOTERS, value: "1@kafka:9093" }
-            - { name: KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE, value: "true" }
-            - { name: ALLOW_PLAINTEXT_LISTENER, value: "yes" }
-          volumeMounts:
-            - name: data
-              mountPath: /bitnami/kafka
-      volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: kafka-data }
+    pod:
+      affinity:
+        podAntiAffinity:
+          # Don't schedule two brokers on the same node — survive a node loss.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { strimzi.io/name: social-kafka }
+              topologyKey: kubernetes.io/hostname
 ---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: social
+  namespace: social
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: 3.7.0
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # Replication == 3 with min.in.sync == 2 → tolerates one broker loss
+      # without data loss or write availability impact.
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      auto.create.topics.enable: false
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+---
+# Declarative topics. Strimzi's Topic Operator will create/manage these.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: chat.messages
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 12  # gives 12-way parallelism for the chat consumer group
+  replicas: 3
+  config:
+    retention.ms: 1209600000   # 14 days
+    cleanup.policy: delete
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: chat.messages.dlq
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 3
+  replicas: 3
+  config: { retention.ms: 2592000000 }   # 30 days for forensic replay
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: social.events
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 6
+  replicas: 3
+  config: { retention.ms: 604800000 }   # 7 days
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: social.events.dlq
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 3
+  replicas: 3
+  config: { retention.ms: 2592000000 }
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: media.uploaded
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 6
+  replicas: 3
+  config: { retention.ms: 86400000 }
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: media.uploaded.dlq
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 3
+  replicas: 3
+  config: { retention.ms: 2592000000 }
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: media.transcoded
+  namespace: social
+  labels: { strimzi.io/cluster: social }
+spec:
+  partitions: 6
+  replicas: 3
+  config: { retention.ms: 604800000 }
+---
+# Strimzi exposes brokers at `<cluster>-kafka-bootstrap.<ns>:9092`.
+# Override KAFKA_BOOTSTRAP_SERVERS in social-config to point there.
 apiVersion: v1
 kind: Service
 metadata:
   name: kafka
   namespace: social
 spec:
-  selector: { app: kafka }
-  ports: [{ port: 9092, targetPort: 9092 }]
+  type: ExternalName
+  externalName: social-kafka-bootstrap.social.svc.cluster.local
+  ports: [{ port: 9092 }]

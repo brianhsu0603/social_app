@@ -5,19 +5,24 @@ metadata:
   namespace: social
 data:
   APP_ENV: production
-  DATABASE_URL: postgresql+psycopg://social:social@postgres:5432/social
-  MONGO_URL: mongodb://mongo:27017
+  # Backend talks to pgbouncer, not Postgres directly, so we don't blow past max_connections.
+  DATABASE_URL: postgresql+psycopg://social:social@pgbouncer:5432/social
+  # Mongo replica set connection string. Reads can hit secondaries.
+  MONGO_URL: mongodb://mongo-0.mongo:27017,mongo-1.mongo:27017,mongo-2.mongo:27017/?replicaSet=rs0&readPreference=secondaryPreferred
   MONGO_DB: social_chat
-  REDIS_URL: redis://redis:6379/0
-  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  # Sentinels can be added by clients that support them; the plain Redis URL
+  # points to the primary StatefulSet pod (DNS for redis-0.redis resolves to it).
+  REDIS_URL: redis://redis-0.redis:6379/0
+  KAFKA_BOOTSTRAP_SERVERS: social-kafka-bootstrap:9092
   KAFKA_CHAT_TOPIC: chat.messages
   KAFKA_EVENTS_TOPIC: social.events
   KAFKA_CONSUMER_GROUP: social-app
   MINIO_ENDPOINT: minio:9000
-  MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+  MINIO_PUBLIC_ENDPOINT: https://media.example.com
   MINIO_BUCKET: media
   MINIO_SECURE: "false"
-  CORS_ORIGINS: "*"
+  MEILI_URL: http://meilisearch:7700
+  CORS_ORIGINS: "https://app.example.com"
 ---
 apiVersion: v1
 kind: Secret
@@ -32,3 +37,9 @@ stringData:
   POSTGRES_DB: social
   MINIO_ACCESS_KEY: minioadmin
   MINIO_SECRET_KEY: minioadmin
+  MEILI_MASTER_KEY: change-me-in-prod-please
+  # Push provider creds. Empty values trigger the dry-run path in push_service.
+  FCM_PROJECT_ID: ""
+  FCM_ACCESS_TOKEN: ""
+  APNS_JWT: ""
+  APNS_BUNDLE_ID: ""

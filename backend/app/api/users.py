@@ -7,7 +7,6 @@ from app.core.database import get_db
 from app.models import User
 from app.schemas.user import UserOut, UserPublic, UserUpdate
 
-
 router = APIRouter(prefix="/users", tags=["users"])
 
 

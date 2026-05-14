@@ -1,3 +1,10 @@
+# Self-managed Postgres in K8s is a sharp tool. In production you want one of:
+#   - a managed service (RDS / Cloud SQL / Aurora) — best operational choice
+#   - the CloudNativePG or Zalando postgres-operator for streaming replication + failover
+#
+# This manifest is a single-node StatefulSet good for staging / dev clusters.
+# Pair it with PgBouncer (deployed below) so the app holds a small connection
+# pool while pgbouncer fan-outs to many tenants.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -5,7 +12,7 @@ metadata:
   namespace: social
 spec:
   accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 5Gi } }
+  resources: { requests: { storage: 20Gi } }
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -25,22 +32,61 @@ spec:
           ports: [{ containerPort: 5432 }]
           envFrom:
             - secretRef: { name: social-secret }
+          args:
+            - postgres
+            - -c
+            - max_connections=200
+            - -c
+            - shared_buffers=256MB
           volumeMounts:
-            - name: data
-              mountPath: /var/lib/postgresql/data
+            - { name: data, mountPath: /var/lib/postgresql/data }
           readinessProbe:
-            exec:
-              command: ["pg_isready", "-U", "social"]
+            exec: { command: ["pg_isready", "-U", "social"] }
             initialDelaySeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "social"] }
+            initialDelaySeconds: 30
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: postgres-data }
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: postgres
-  namespace: social
+metadata: { name: postgres, namespace: social }
 spec:
   selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+# PgBouncer: connection pooling so we don't blow past Postgres' max_connections
+# when the backend autoscales to 20+ pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: pgbouncer, namespace: social }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: pgbouncer } }
+  template:
+    metadata: { labels: { app: pgbouncer } }
+    spec:
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:1.23.1
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: DB_HOST, value: postgres }
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_PASSWORD } } }
+            - { name: DB_NAME, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_DB } } }
+            - { name: POOL_MODE, value: transaction }
+            - { name: MAX_CLIENT_CONN, value: "1000" }
+            - { name: DEFAULT_POOL_SIZE, value: "25" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pgbouncer, namespace: social }
+spec:
+  selector: { app: pgbouncer }
   ports: [{ port: 5432, targetPort: 5432 }]

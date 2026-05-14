@@ -9,14 +9,22 @@ from app.core.config import settings
 from app.models import Post, PostMedia, Like, Comment, User
 from app.schemas.post import PostCreate, PostOut
 
-
 router = APIRouter(prefix="/posts", tags=["posts"])
 
 
 def _to_post_out(db: Session, post: Post, viewer_id: int) -> dict:
-    like_count = db.scalar(select(func.count(Like.id)).where(Like.post_id == post.id)) or 0
-    comment_count = db.scalar(select(func.count(Comment.id)).where(Comment.post_id == post.id)) or 0
-    liked = db.scalar(select(Like.id).where(Like.post_id == post.id, Like.user_id == viewer_id)) is not None
+    like_count = (
+        db.scalar(select(func.count(Like.id)).where(Like.post_id == post.id)) or 0
+    )
+    comment_count = (
+        db.scalar(select(func.count(Comment.id)).where(Comment.post_id == post.id)) or 0
+    )
+    liked = (
+        db.scalar(
+            select(Like.id).where(Like.post_id == post.id, Like.user_id == viewer_id)
+        )
+        is not None
+    )
     return {
         "id": post.id,
         "content": post.content,
