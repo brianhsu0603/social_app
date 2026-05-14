@@ -1,0 +1,70 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user
+from app.core.database import get_db
+from app.models import Comment, Post, User
+from app.schemas.comment import CommentCreate, CommentOut
+
+
+router = APIRouter(tags=["comments"])
+
+
+def _to_comment_out(db: Session, comment: Comment) -> dict:
+    return {
+        "id": comment.id,
+        "post_id": comment.post_id,
+        "content": comment.content,
+        "created_at": comment.created_at,
+        "author": db.get(User, comment.author_id),
+    }
+
+
+@router.get("/posts/{post_id}/comments", response_model=list[CommentOut])
+def list_comments(
+    post_id: int,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[dict]:
+    if not db.get(Post, post_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
+    stmt = (
+        select(Comment)
+        .where(Comment.post_id == post_id)
+        .order_by(Comment.id.asc())
+        .limit(min(limit, 200))
+    )
+    return [_to_comment_out(db, c) for c in db.execute(stmt).scalars()]
+
+
+@router.post("/posts/{post_id}/comments", response_model=CommentOut, status_code=status.HTTP_201_CREATED)
+def add_comment(
+    post_id: int,
+    payload: CommentCreate,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> dict:
+    if not db.get(Post, post_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
+    comment = Comment(post_id=post_id, author_id=current.id, content=payload.content)
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    return _to_comment_out(db, comment)
+
+
+@router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> None:
+    comment = db.get(Comment, comment_id)
+    if not comment:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "comment not found")
+    if comment.author_id != current.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your comment")
+    db.delete(comment)
+    db.commit()

@@ -1,0 +1,95 @@
+# One-shot migration runner. Re-applies every deploy; alembic is idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: social
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: ghcr.io/your-org/social-backend:latest
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: social
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: backend } }
+  template:
+    metadata: { labels: { app: backend } }
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/your-org/social-backend:latest
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1, memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: social
+spec:
+  selector: { app: backend }
+  ports: [{ port: 80, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: events-worker
+  namespace: social
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: events-worker } }
+  template:
+    metadata: { labels: { app: events-worker } }
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/social-backend:latest
+          command: ["python", "-m", "app.workers.events_consumer"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: social
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

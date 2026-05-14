@@ -1,0 +1,33 @@
+# Routes traffic into the cluster. Assumes an nginx ingress controller.
+# `api.example.com` -> backend (REST + WebSocket)
+# `app.example.com` -> frontend SPA
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: social-ingress
+  namespace: social
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # WebSocket upgrade works out-of-the-box with nginx-ingress; no extra hint needed.
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port: { number: 80 }
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port: { number: 80 }

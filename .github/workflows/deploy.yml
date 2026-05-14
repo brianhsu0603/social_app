@@ -1,0 +1,36 @@
+name: deploy
+
+on:
+  workflow_run:
+    workflows: ["backend-ci", "frontend-ci"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with: { version: v1.30.0 }
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: Apply manifests
+        run: kubectl apply -f k8s/
+
+      - name: Roll deployments to pick up new :latest images
+        run: |
+          kubectl -n social rollout restart deployment/backend
+          kubectl -n social rollout restart deployment/events-worker
+          kubectl -n social rollout restart deployment/frontend
+          kubectl -n social rollout status deployment/backend --timeout=5m
+          kubectl -n social rollout status deployment/frontend --timeout=5m
