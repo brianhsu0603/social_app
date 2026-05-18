@@ -124,17 +124,6 @@ def upgrade() -> None:
     op.create_index("ix_likes_post_id", "likes", ["post_id"])
     op.create_index("ix_likes_user_id", "likes", ["user_id"])
 
-    friendship_status = sa.Enum(
-        "pending",
-        "accepted",
-        "blocked",
-        name="friendship_status",
-        create_type=False,
-    )
-    sa.Enum("pending", "accepted", "blocked", name="friendship_status").create(
-        op.get_bind(),
-        checkfirst=True,
-    )
     op.create_table(
         "friendships",
         sa.Column("id", sa.Integer, primary_key=True),
@@ -151,7 +140,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
-            "status", friendship_status, nullable=False, server_default="pending"
+            "status",
+            sa.Enum("PENDING", "ACCEPTED", "BLOCKED", name="friendship_status"),
+            nullable=False,
+            server_default="PENDING",
         ),
         sa.Column(
             "created_at",

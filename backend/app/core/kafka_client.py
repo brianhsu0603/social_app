@@ -30,7 +30,7 @@ async def get_producer() -> AIOKafkaProducer:
             acks="all",
             request_timeout_ms=15000,
             linger_ms=5,
-            compression_type="lz4",
+            compression_type="gzip",
         )
         await _producer.start()
     return _producer

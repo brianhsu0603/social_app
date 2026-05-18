@@ -14,9 +14,9 @@ from app.core.database import Base
 
 
 class FriendshipStatus(str, enum.Enum):
-    PENDING = "pending"
-    ACCEPTED = "accepted"
-    BLOCKED = "blocked"
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    BLOCKED = "BLOCKED"
 
 
 class Friendship(Base):
