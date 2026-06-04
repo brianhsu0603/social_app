@@ -41,6 +41,7 @@ export interface ChatRoom {
   created_by: number;
   created_at: string;
   members: User[];
+  unread_count: number;
 }
 
 export interface ChatMessage {

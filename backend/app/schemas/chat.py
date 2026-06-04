@@ -18,6 +18,7 @@ class ChatRoomOut(BaseModel):
     created_by: int
     created_at: datetime
     members: list[UserPublic] = []
+    unread_count: int = 0
 
 
 class ChatMessageIn(BaseModel):

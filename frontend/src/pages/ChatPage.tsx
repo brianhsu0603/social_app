@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { chat as chatApi, friends as friendsApi, media as mediaApi } from "@/api/endpoints";
-import { useChatSocket } from "@/hooks/useChatSocket";
+import { useChatSocket, type TypingUser } from "@/hooks/useChatSocket";
 import { useAuth } from "@/store/auth";
 import type { ChatMessage } from "@/types";
 
@@ -24,6 +24,12 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [selectedMembers, setSelectedMembers] = useState<Set<number>>(new Set());
+  const [groupName, setGroupName] = useState("");
+  const typingTimeoutRef = useRef<NodeJS.Timeout>();
+  const lastTypingTimeRef = useRef<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Mongo returns newest-first; render oldest-first.
@@ -31,33 +37,85 @@ export default function ChatPage() {
     if (historyQ.data) setMessages([...historyQ.data].reverse());
   }, [historyQ.data]);
 
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
+  }, []);
+
   const onWsMessage = useCallback((m: ChatMessage) => {
     setMessages((prev) => (prev.some((p) => p.id === m.id) ? prev : [...prev, m]));
   }, []);
-  const { ready, send } = useChatSocket(rid, onWsMessage);
+  
+  const onTyping = useCallback((users: TypingUser[]) => {
+    setTypingUsers((prev) => {
+      const updated = new Set(prev);
+      users.forEach((u) => {
+        // Filter out current user's typing events
+        if (u.user_id !== me?.id) {
+          updated.add(u.user_id);
+        }
+      });
+      return updated;
+    });
+    
+    // Clear typing indicator after 3 seconds of inactivity
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      setTypingUsers(new Set());
+    }, 3000);
+  }, [me?.id]);
+  
+  const { ready, send, sendTyping } = useChatSocket(rid, onWsMessage, onTyping);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages.length]);
+  }, [messages.length, typingUsers.size]);
 
   async function sendMessage(payload: { content: string; media?: { url: string; media_type: "image" | "video" } }) {
-    if (!rid) return;
+    if (!rid || !me) return;
+    
+    // Create an optimistic message with a temporary ID
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      room_id: rid,
+      sender_id: me.id,
+      content: payload.content,
+      media_url: payload.media?.url ?? null,
+      media_type: payload.media?.media_type ?? null,
+      created_at: new Date().toISOString(),
+    };
+    
+    // Add optimistic message immediately
+    setMessages((prev) => [...prev, optimisticMessage]);
+    
+    // Try to send via WebSocket first
     if (ready && send(payload.content, payload.media)) return;
+    
     // Fallback to REST when the socket isn't open yet.
-    const m = await fetch(`${import.meta.env.VITE_API_URL}/chat/rooms/${rid}/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${localStorage.getItem("token")}`,
-      },
-      body: JSON.stringify({
-        room_id: rid,
-        content: payload.content,
-        media_url: payload.media?.url ?? null,
-        media_type: payload.media?.media_type ?? null,
-      }),
-    }).then((r) => r.json());
-    onWsMessage(m);
+    try {
+      const m = await fetch(`${import.meta.env.VITE_API_URL}/chat/rooms/${rid}/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({
+          room_id: rid,
+          content: payload.content,
+          media_url: payload.media?.url ?? null,
+          media_type: payload.media?.media_type ?? null,
+        }),
+      }).then((r) => r.json());
+      
+      // Replace optimistic message with actual message from server
+      setMessages((prev) => prev.map((msg) => (msg.id === tempId ? m : msg)));
+    } catch (error) {
+      console.error("Failed to send message:", error);
+      // Remove optimistic message on error
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+    }
   }
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
@@ -78,6 +136,17 @@ export default function ChatPage() {
     onSuccess: (room) => {
       qc.invalidateQueries({ queryKey: ["chat", "rooms"] });
       navigate(`/chat/${room.id}`);
+    },
+  });
+
+  const newGroup = useMutation({
+    mutationFn: (memberIds: number[]) => chatApi.createRoom(memberIds, groupName || undefined),
+    onSuccess: (room) => {
+      qc.invalidateQueries({ queryKey: ["chat", "rooms"] });
+      navigate(`/chat/${room.id}`);
+      setShowGroupModal(false);
+      setSelectedMembers(new Set());
+      setGroupName("");
     },
   });
 
@@ -106,6 +175,14 @@ export default function ChatPage() {
           })}
         </ul>
         <h3 className="font-semibold mb-2 text-sm">Start new</h3>
+        <div className="space-y-2 mb-4">
+          <button
+            onClick={() => setShowGroupModal(true)}
+            className="w-full px-2 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+          >
+            ➕ New Group
+          </button>
+        </div>
         <ul className="space-y-1">
           {friendsQ.data?.map((u) => (
             <li key={u.id}>
@@ -149,6 +226,19 @@ export default function ChatPage() {
               </div>
             );
           })}
+          {typingUsers.size > 0 && (
+            <div className="flex justify-start">
+              <div className="text-slate-500 text-xs italic px-3 py-1">
+                {Array.from(typingUsers)
+                  .filter((uid) => uid !== me?.id)
+                  .map((uid) => {
+                    const user = currentRoom?.members.find((m) => m.id === uid);
+                    return user?.display_name || "Someone";
+                  })
+                  .join(", ")} {Array.from(typingUsers).filter((uid) => uid !== me?.id).length === 1 ? "is" : "are"} typing...
+              </div>
+            </div>
+          )}
         </div>
 
         {rid != null && (
@@ -167,7 +257,15 @@ export default function ChatPage() {
             </label>
             <input
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                // Throttle typing events to once per second
+                const now = Date.now();
+                if (now - lastTypingTimeRef.current > 1000) {
+                  sendTyping();
+                  lastTypingTimeRef.current = now;
+                }
+              }}
               placeholder="Message…"
               className="flex-1 border rounded px-3 py-1.5 text-sm"
             />
@@ -175,6 +273,69 @@ export default function ChatPage() {
           </form>
         )}
       </section>
+
+      {showGroupModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-96 max-h-[90vh] flex flex-col">
+            <h2 className="text-lg font-semibold mb-4">Create Group Chat</h2>
+            
+            <input
+              type="text"
+              placeholder="Group name (optional)"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              className="w-full border rounded px-3 py-2 mb-4 text-sm"
+            />
+
+            <div className="flex-1 overflow-y-auto border rounded mb-4 p-2">
+              <p className="text-xs text-slate-500 mb-2">Select members:</p>
+              {friendsQ.data?.map((friend) => (
+                <label key={friend.id} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedMembers.has(friend.id)}
+                    onChange={(e) => {
+                      const updated = new Set(selectedMembers);
+                      if (e.target.checked) {
+                        updated.add(friend.id);
+                      } else {
+                        updated.delete(friend.id);
+                      }
+                      setSelectedMembers(updated);
+                    }}
+                    className="rounded"
+                  />
+                  <span className="text-sm">{friend.display_name}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setShowGroupModal(false);
+                  setSelectedMembers(new Set());
+                  setGroupName("");
+                }}
+                className="px-3 py-1.5 border rounded text-sm hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedMembers.size > 0) {
+                    newGroup.mutate(Array.from(selectedMembers));
+                  }
+                }}
+                disabled={selectedMembers.size === 0 || newGroup.isPending}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                {newGroup.isPending ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

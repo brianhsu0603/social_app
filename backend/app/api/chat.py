@@ -19,14 +19,14 @@ from app.core.observability import WS_CONNECTIONS
 from app.core.redis_client import get_redis
 from app.models import ChatRoom, ChatRoomMember, User
 from app.schemas.chat import ChatMessageIn, ChatMessageOut, ChatRoomCreate, ChatRoomOut
-from app.services import chat_service, presence_service
+from app.services import chat_service, presence_service, read_receipt_service
 from app.services.ws_manager import manager
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-def _room_with_members(db: Session, room: ChatRoom) -> dict:
+async def _room_with_members(db: Session, room: ChatRoom, user_id: int) -> dict:
     member_ids = (
         db.execute(
             select(ChatRoomMember.user_id).where(ChatRoomMember.room_id == room.id)
@@ -35,6 +35,7 @@ def _room_with_members(db: Session, room: ChatRoom) -> dict:
         .all()
     )
     members = list(db.execute(select(User).where(User.id.in_(member_ids))).scalars())
+    unread = await read_receipt_service.unread_count(room.id, user_id)
     return {
         "id": room.id,
         "name": room.name,
@@ -42,11 +43,12 @@ def _room_with_members(db: Session, room: ChatRoom) -> dict:
         "created_by": room.created_by,
         "created_at": room.created_at,
         "members": members,
+        "unread_count": unread,
     }
 
 
 @router.post("/rooms", response_model=ChatRoomOut, status_code=status.HTTP_201_CREATED)
-def create_room(
+async def create_room(
     payload: ChatRoomCreate,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
@@ -63,7 +65,7 @@ def create_room(
             .having(func.count(ChatRoomMember.id) == 2)
         ).scalar()
         if existing:
-            return _room_with_members(db, existing)
+            return await _room_with_members(db, existing, current.id)
 
     room = ChatRoom(name=payload.name, is_group=is_group, created_by=current.id)
     db.add(room)
@@ -72,11 +74,11 @@ def create_room(
         db.add(ChatRoomMember(room_id=room.id, user_id=uid))
     db.commit()
     db.refresh(room)
-    return _room_with_members(db, room)
+    return await _room_with_members(db, room, current.id)
 
 
 @router.get("/rooms", response_model=list[ChatRoomOut])
-def list_my_rooms(
+async def list_my_rooms(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
@@ -93,7 +95,7 @@ def list_my_rooms(
         db.execute(select(ChatRoom).where(ChatRoom.id.in_(room_ids))).scalars()
     )
     rooms.sort(key=lambda r: r.id, reverse=True)
-    return [_room_with_members(db, r) for r in rooms]
+    return [await _room_with_members(db, r, current.id) for r in rooms]
 
 
 @router.get("/rooms/{room_id}/messages", response_model=list[ChatMessageOut])
@@ -106,7 +108,12 @@ async def history(
 ) -> list[dict]:
     if not chat_service.is_member(db, room_id, current.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member")
-    return await chat_service.list_history(room_id, limit=limit, before_id=before_id)
+    messages = await chat_service.list_history(
+        room_id, limit=limit, before_id=before_id
+    )
+    if messages:
+        await read_receipt_service.mark_read(room_id, current.id, messages[0]["id"])
+    return messages
 
 
 @router.post(
@@ -124,13 +131,15 @@ async def send_message_rest(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "room_id mismatch")
     if not chat_service.is_member(db, room_id, current.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member")
-    return await chat_service.persist_and_fan_out(
+    msg = await chat_service.persist_and_fan_out(
         room_id=room_id,
         sender_id=current.id,
         content=payload.content,
         media_url=payload.media_url,
         media_type=payload.media_type,
     )
+    await read_receipt_service.mark_read(room_id, current.id, msg["id"])
+    return msg
 
 
 @router.websocket("/ws/{room_id}")
@@ -152,7 +161,9 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
     heartbeat = asyncio.create_task(
         presence_service.heartbeat_loop(user.id, stop_event)
     )
-    typing_task = asyncio.create_task(_subscribe_typing(room_id, websocket, stop_event))
+    typing_task = asyncio.create_task(
+        _subscribe_typing(room_id, websocket, stop_event, user.id)
+    )
 
     try:
         while True:
@@ -161,13 +172,14 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
             if kind == "typing":
                 await presence_service.publish_typing(room_id, user.id)
                 continue
-            await chat_service.persist_and_fan_out(
+            msg = await chat_service.persist_and_fan_out(
                 room_id=room_id,
                 sender_id=user.id,
                 content=payload.get("content", ""),
                 media_url=payload.get("media_url"),
                 media_type=payload.get("media_type"),
             )
+            await read_receipt_service.mark_read(room_id, user.id, msg["id"])
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -182,7 +194,7 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
 
 
 async def _subscribe_typing(
-    room_id: int, ws: WebSocket, stop_event: asyncio.Event
+    room_id: int, ws: WebSocket, stop_event: asyncio.Event, user_id: int
 ) -> None:
     """Bridge Redis typing channel → this socket. One pubsub task per socket
     is wasteful at huge scale; for now it keeps the code simple."""
@@ -195,6 +207,9 @@ async def _subscribe_typing(
             if msg and msg.get("type") == "message":
                 try:
                     payload = json.loads(msg["data"])
+                    # Filter out current user's typing events
+                    if payload.get("user_id") == user_id:
+                        continue
                 except Exception:
                     continue
                 await ws.send_json({"type": "typing", **payload})
