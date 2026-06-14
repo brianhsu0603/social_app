@@ -23,6 +23,10 @@ class PostCreate(BaseModel):
     media: list[MediaIn] = Field(default_factory=list)
 
 
+class PostUpdate(BaseModel):
+    content: str = Field(max_length=5000)
+
+
 class PostOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

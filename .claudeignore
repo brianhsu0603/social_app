@@ -1,0 +1,71 @@
+# Dependencies & build artifacts
+node_modules/
+frontend/dist/
+frontend/.vite/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Alembic generated versions (keep alembic/ folder but skip auto-gen noise)
+backend/alembic/versions/
+
+# Docker & infra local state
+.docker/
+docker-compose.override.yml
+
+# Logs & temp files
+*.log
+*.tmp
+celerybeat-schedule
+
+# Media / uploads (large binaries, not code)
+media/
+uploads/
+*.mp4
+*.mov
+*.avi
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webm
+*.pdf
+
+# MinIO local data
+minio-data/
+
+# Test coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets (never let Claude read these)
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.crt
+
+# Git
+.git/
+.github/
+
+# Kubernetes generated/runtime state (keep manifests, skip dumps)
+k8s/debug/
+k8s/*.bak

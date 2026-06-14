@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.core.kafka_client import publish
 from app.core.config import settings
 from app.models import Post, PostMedia, Like, Comment, User
-from app.schemas.post import PostCreate, PostOut
+from app.schemas.post import PostCreate, PostOut, PostUpdate
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -82,6 +82,24 @@ def get_post(
     post = db.get(Post, post_id, options=[selectinload(Post.media)])
     if not post:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
+    return _to_post_out(db, post, current.id)
+
+
+@router.patch("/{post_id}", response_model=PostOut)
+def update_post(
+    post_id: int,
+    payload: PostUpdate,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> dict:
+    post = db.get(Post, post_id, options=[selectinload(Post.media)])
+    if not post:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
+    if post.author_id != current.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your post")
+    post.content = payload.content
+    db.commit()
+    db.refresh(post)
     return _to_post_out(db, post, current.id)
 
 

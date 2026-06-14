@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { ChatMessage, ChatRoom, Comment, FriendRequest, Media, Post, User } from "@/types";
+import type { ChatMessage, ChatRoom, Comment, FriendRequest, Media, NotificationList, Post, User } from "@/types";
 
 export const auth = {
   async register(body: { email: string; username: string; display_name: string; password: string }) {
@@ -47,6 +47,10 @@ export const posts = {
     const { data } = await api.get<Post[]>(`/posts/user/${userId}`);
     return data;
   },
+  async update(id: number, content: string) {
+    const { data } = await api.patch<Post>(`/posts/${id}`, { content });
+    return data;
+  },
   async remove(id: number) {
     await api.delete(`/posts/${id}`);
   },
@@ -76,6 +80,13 @@ export const comments = {
   async add(postId: number, content: string) {
     const { data } = await api.post<Comment>(`/posts/${postId}/comments`, { content });
     return data;
+  },
+  async update(commentId: number, content: string) {
+    const { data } = await api.patch<Comment>(`/comments/${commentId}`, { content });
+    return data;
+  },
+  async remove(commentId: number) {
+    await api.delete(`/comments/${commentId}`);
   },
 };
 
@@ -107,6 +118,19 @@ export const media = {
     form.append("file", file);
     const { data } = await api.post<{ url: string; media_type: "image" | "video" }>("/media/upload", form);
     return data;
+  },
+};
+
+export const notifications = {
+  async list() {
+    const { data } = await api.get<NotificationList>("/notifications");
+    return data;
+  },
+  async markOneRead(id: number) {
+    await api.patch(`/notifications/${id}/read`);
+  },
+  async markAllRead() {
+    await api.post("/notifications/read-all");
   },
 };
 

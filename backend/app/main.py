@@ -15,6 +15,7 @@ from app.api import (
     friends,
     likes,
     media,
+    notifications,
     posts,
     presence,
     read_receipts,
@@ -118,6 +119,7 @@ app.include_router(read_receipts.router)
 app.include_router(presence.router)
 app.include_router(devices.router)
 app.include_router(search.router)
+app.include_router(notifications.router)
 
 
 @app.get("/health")

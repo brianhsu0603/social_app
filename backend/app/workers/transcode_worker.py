@@ -12,9 +12,7 @@ The original object is never overwritten so failures are recoverable.
 """
 
 import asyncio
-import json
 import logging
-import os
 import subprocess
 import tempfile
 from pathlib import Path

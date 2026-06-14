@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/store/auth";
 import { useChatUnreadCount } from "@/hooks/useChatUnreadCount";
+import { NotificationBell } from "@/components/NotificationBell";
 
 export function Nav() {
   const { user, logout } = useAuth();
@@ -24,6 +25,7 @@ export function Nav() {
           </Link>
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm">
+          <NotificationBell />
           {user && (
             <Link to={`/profile/${user.id}`} className="hover:underline">
               {user.display_name}

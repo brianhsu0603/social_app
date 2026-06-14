@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.models import Like, Post, User
+from app.models import Like, Notification, Post, User
 
 router = APIRouter(tags=["likes"])
 
@@ -16,13 +16,26 @@ def like_post(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> None:
-    if not db.get(Post, post_id):
+    post = db.get(Post, post_id)
+    if not post:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
     db.add(Like(post_id=post_id, user_id=current.id))
     try:
         db.commit()
     except IntegrityError:
         db.rollback()  # already liked — idempotent
+        return
+
+    if post.author_id != current.id:
+        db.add(
+            Notification(
+                recipient_id=post.author_id,
+                actor_id=current.id,
+                type="like",
+                post_id=post_id,
+            )
+        )
+        db.commit()
 
 
 @router.delete("/posts/{post_id}/like", status_code=status.HTTP_204_NO_CONTENT)

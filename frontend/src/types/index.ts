@@ -54,6 +54,20 @@ export interface ChatMessage {
   created_at: string;
 }
 
+export interface Notification {
+  id: number;
+  type: "like" | "comment";
+  post_id: number;
+  read: boolean;
+  created_at: string;
+  actor: User;
+}
+
+export interface NotificationList {
+  notifications: Notification[];
+  unread_count: number;
+}
+
 export interface FriendRequest {
   id: number;
   requester: User;

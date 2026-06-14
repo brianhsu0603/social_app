@@ -6,6 +6,7 @@ from app.models.friendship import Friendship, FriendshipStatus
 from app.models.chat import ChatRoom, ChatRoomMember
 from app.models.device import Device
 from app.models.refresh_token import RefreshToken
+from app.models.notification import Notification
 
 __all__ = [
     "User",
@@ -19,4 +20,5 @@ __all__ = [
     "ChatRoomMember",
     "Device",
     "RefreshToken",
+    "Notification",
 ]

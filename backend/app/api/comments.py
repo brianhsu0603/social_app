@@ -6,8 +6,8 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.kafka_client import publish
-from app.models import Comment, Post, User
-from app.schemas.comment import CommentCreate, CommentOut
+from app.models import Comment, Notification, Post, User
+from app.schemas.comment import CommentCreate, CommentOut, CommentUpdate
 
 router = APIRouter(tags=["comments"])
 
@@ -58,6 +58,18 @@ async def add_comment(
     db.commit()
     db.refresh(comment)
 
+    post = db.get(Post, post_id)
+    if post and post.author_id != current.id:
+        db.add(
+            Notification(
+                recipient_id=post.author_id,
+                actor_id=current.id,
+                type="comment",
+                post_id=post_id,
+            )
+        )
+        db.commit()
+
     try:
         await publish(
             settings.kafka_events_topic,
@@ -72,6 +84,24 @@ async def add_comment(
     except Exception:
         pass  # bus down ≠ write failure; the comment is already saved
 
+    return _to_comment_out(db, comment)
+
+
+@router.patch("/comments/{comment_id}", response_model=CommentOut)
+def update_comment(
+    comment_id: int,
+    payload: CommentUpdate,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> dict:
+    comment = db.get(Comment, comment_id)
+    if not comment:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "comment not found")
+    if comment.author_id != current.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "not your comment")
+    comment.content = payload.content
+    db.commit()
+    db.refresh(comment)
     return _to_comment_out(db, comment)
 
 
