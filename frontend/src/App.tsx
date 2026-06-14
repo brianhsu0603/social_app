@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-
 import { auth as authApi } from "@/api/endpoints";
 import { Nav } from "@/components/Nav";
 import { useAuth } from "@/store/auth";
+import { useUserSocket } from "@/hooks/useUserSocket";
 
 import FeedPage from "@/pages/FeedPage";
 import LoginPage from "@/pages/LoginPage";
@@ -22,6 +23,7 @@ function Protected({ children }: { children: JSX.Element }) {
 export default function App() {
   const { token, user, setUser, logout } = useAuth();
   const navigate = useNavigate();
+  useUserSocket(token);
 
   useEffect(() => {
     if (token && !user) {

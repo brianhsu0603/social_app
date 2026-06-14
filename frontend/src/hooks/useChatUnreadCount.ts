@@ -1,25 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import { chat } from "@/api/endpoints";
+import { useUserPush } from "@/store/userPush";
 
 export function useChatUnreadCount() {
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { chatUnreadCount, setChatUnreadCount } = useUserPush();
+  const initialized = useRef(false);
 
+  // Fetch the accurate count once on mount; WebSocket increments handle updates.
   useEffect(() => {
-    const fetchUnreadCount = async () => {
-      try {
-        const rooms = await chat.listRooms();
-        const total = rooms.reduce((sum, room) => sum + room.unread_count, 0);
-        setUnreadCount(total);
-      } catch (error) {
-        console.error("Failed to fetch unread count:", error);
-      }
-    };
+    if (initialized.current) return;
+    initialized.current = true;
+    chat.listRooms().then((rooms) => {
+      const total = rooms.reduce((sum, r) => sum + r.unread_count, 0);
+      setChatUnreadCount(total);
+    }).catch(() => {});
+  }, [setChatUnreadCount]);
 
-    fetchUnreadCount();
-    // Poll every 5 seconds for unread counts
-    const interval = setInterval(fetchUnreadCount, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  return unreadCount;
+  return chatUnreadCount;
 }

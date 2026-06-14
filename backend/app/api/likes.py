@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import Like, Notification, Post, User
+from app.services import notification_push
 
 router = APIRouter(tags=["likes"])
 
 
 @router.post("/posts/{post_id}/like", status_code=status.HTTP_204_NO_CONTENT)
-def like_post(
+async def like_post(
     post_id: int,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
@@ -36,6 +37,7 @@ def like_post(
             )
         )
         db.commit()
+        await notification_push.push(post.author_id, {"type": "new_notification"})
 
 
 @router.delete("/posts/{post_id}/like", status_code=status.HTTP_204_NO_CONTENT)

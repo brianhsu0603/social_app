@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.core.kafka_client import publish
 from app.models import Comment, Notification, Post, User
 from app.schemas.comment import CommentCreate, CommentOut, CommentUpdate
+from app.services import notification_push
 
 router = APIRouter(tags=["comments"])
 
@@ -69,6 +70,7 @@ async def add_comment(
             )
         )
         db.commit()
+        await notification_push.push(post.author_id, {"type": "new_notification"})
 
     try:
         await publish(

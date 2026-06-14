@@ -4,8 +4,13 @@ fanned out from any backend pod and pushes them to local WebSocket clients."""
 import asyncio
 import logging
 
+from sqlalchemy import select
+
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.kafka_client import consume
+from app.models import ChatRoomMember
+from app.services import notification_push
 from app.services.ws_manager import manager
 
 log = logging.getLogger(__name__)
@@ -16,6 +21,22 @@ async def _handle(msg: dict) -> None:
     if room_id is None:
         return
     await manager.broadcast(int(room_id), msg)
+
+    sender_id = msg.get("sender_id")
+    try:
+        with SessionLocal() as db:
+            member_ids = db.execute(
+                select(ChatRoomMember.user_id).where(
+                    ChatRoomMember.room_id == room_id
+                )
+            ).scalars().all()
+        for uid in member_ids:
+            if uid != sender_id:
+                await notification_push.push(
+                    uid, {"type": "new_chat_message", "room_id": room_id}
+                )
+    except Exception:
+        log.warning("failed to push chat unread update for room_id=%s", room_id)
 
 
 async def run(stop_event: asyncio.Event) -> None:

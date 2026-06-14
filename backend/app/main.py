@@ -21,6 +21,7 @@ from app.api import (
     read_receipts,
     search,
     users,
+    ws,
 )
 from app.core.config import settings
 from app.core.kafka_client import close_producer, get_producer
@@ -120,6 +121,7 @@ app.include_router(presence.router)
 app.include_router(devices.router)
 app.include_router(search.router)
 app.include_router(notifications.router)
+app.include_router(ws.router)
 
 
 @app.get("/health")

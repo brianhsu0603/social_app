@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { chat as chatApi, friends as friendsApi, media as mediaApi } from "@/api/endpoints";
 import { useChatSocket, type TypingUser } from "@/hooks/useChatSocket";
 import { useAuth } from "@/store/auth";
+import { useUserPush } from "@/store/userPush";
 import type { ChatMessage } from "@/types";
 
 export default function ChatPage() {
@@ -12,6 +13,15 @@ export default function ChatPage() {
   const me = useAuth((s) => s.user);
   const navigate = useNavigate();
   const qc = useQueryClient();
+
+  const { setChatUnreadCount, setOnChatPage } = useUserPush();
+
+  // Immediately clear the nav badge and suppress further increments while here.
+  useEffect(() => {
+    setOnChatPage(true);
+    setChatUnreadCount(0);
+    return () => setOnChatPage(false);
+  }, [setOnChatPage, setChatUnreadCount]);
 
   const roomsQ = useQuery({ queryKey: ["chat", "rooms"], queryFn: chatApi.listRooms });
   const historyQ = useQuery({

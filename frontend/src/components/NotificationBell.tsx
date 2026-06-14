@@ -1,32 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { notifications as notificationsApi } from "@/api/endpoints";
+import { useUserPush } from "@/store/userPush";
 import type { Notification } from "@/types";
 
 export function NotificationBell() {
   const [items, setItems] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  const fetchNotifications = async () => {
+  const { notificationUnreadCount, setNotificationUnreadCount } = useUserPush();
+
+  const fetchNotifications = useCallback(async () => {
     try {
       const data = await notificationsApi.list();
       setItems(data.notifications);
-      setUnreadCount(data.unread_count);
+      setNotificationUnreadCount(data.unread_count);
     } catch {
       // ignore — fail silently on network errors
     }
-  };
+  }, [setNotificationUnreadCount]);
 
+  // Fetch once on mount for the initial list + accurate count.
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30_000);
-    return () => clearInterval(interval);
-  }, []);
+  }, [fetchNotifications]);
 
-  // Close dropdown when clicking outside
+  // Refetch the list whenever a new notification is pushed via WebSocket.
+  const prevCountRef = useRef(notificationUnreadCount);
+  useEffect(() => {
+    if (notificationUnreadCount > prevCountRef.current) {
+      fetchNotifications();
+    }
+    prevCountRef.current = notificationUnreadCount;
+  }, [notificationUnreadCount, fetchNotifications]);
+
+  // Close dropdown when clicking outside.
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -38,21 +48,26 @@ export function NotificationBell() {
   }, []);
 
   const handleOpen = () => {
-    setOpen((prev) => !prev);
+    setOpen((prev) => {
+      if (!prev) fetchNotifications(); // always fetch fresh list on open
+      return !prev;
+    });
   };
 
   const handleMarkAllRead = async () => {
     await notificationsApi.markAllRead();
     setItems((prev) => prev.map((n) => ({ ...n, read: true })));
-    setUnreadCount(0);
+    setNotificationUnreadCount(0);
   };
 
   const handleNotificationClick = async (n: Notification) => {
     if (!n.read) {
       try {
         await notificationsApi.markOneRead(n.id);
-        setItems((prev) => prev.map((item) => item.id === n.id ? { ...item, read: true } : item));
-        setUnreadCount((prev) => Math.max(0, prev - 1));
+        setItems((prev) =>
+          prev.map((item) => (item.id === n.id ? { ...item, read: true } : item))
+        );
+        setNotificationUnreadCount(Math.max(0, notificationUnreadCount - 1));
       } catch {
         // navigate anyway even if the mark-read call fails
       }
@@ -82,9 +97,9 @@ export function NotificationBell() {
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
         </svg>
-        {unreadCount > 0 && (
+        {notificationUnreadCount > 0 && (
           <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
-            {unreadCount > 99 ? "99+" : unreadCount}
+            {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
           </span>
         )}
       </button>
@@ -93,7 +108,7 @@ export function NotificationBell() {
         <div className="absolute right-0 top-8 w-80 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
           <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
             <span className="font-semibold text-sm">Notifications</span>
-            {unreadCount > 0 && (
+            {notificationUnreadCount > 0 && (
               <button
                 onClick={handleMarkAllRead}
                 className="text-xs text-blue-600 hover:underline"
