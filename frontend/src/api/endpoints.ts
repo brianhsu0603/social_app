@@ -149,4 +149,11 @@ export const chat = {
     });
     return data;
   },
+  async receipts(roomId: number) {
+    const { data } = await api.get<Array<{ user_id: number; last_read_message_id: string }>>(`/chat/rooms/${roomId}/receipts`);
+    return data;
+  },
+  async markRead(roomId: number, messageId: string) {
+    await api.post(`/chat/rooms/${roomId}/read`, null, { params: { message_id: messageId } });
+  },
 };

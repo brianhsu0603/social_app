@@ -2,10 +2,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { chat as chatApi, friends as friendsApi, media as mediaApi } from "@/api/endpoints";
-import { useChatSocket, type TypingUser } from "@/hooks/useChatSocket";
+import { useChatSocket, type ReadReceiptEvent, type TypingUser } from "@/hooks/useChatSocket";
 import { useAuth } from "@/store/auth";
 import { useUserPush } from "@/store/userPush";
 import type { ChatMessage } from "@/types";
+
+type TickStatus = "sent" | "delivered" | "read";
+
+function MessageTick({ status }: { status: TickStatus }) {
+  if (status === "sent") {
+    return (
+      <svg className="w-3 h-3 text-slate-400 mt-0.5" viewBox="0 0 12 9" fill="none">
+        <polyline points="1,5 4,8 11,1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  const color = status === "read" ? "text-blue-500" : "text-slate-400";
+  return (
+    <svg className={`w-4 h-3 ${color} mt-0.5`} viewBox="0 0 16 9" fill="none">
+      <polyline points="1,5 4,8 11,1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points="5,5 8,8 15,1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 export default function ChatPage() {
   const { roomId } = useParams();
@@ -38,7 +57,8 @@ export default function ChatPage() {
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [selectedMembers, setSelectedMembers] = useState<Set<number>>(new Set());
   const [groupName, setGroupName] = useState("");
-  const typingTimeoutRef = useRef<NodeJS.Timeout>();
+  const [receipts, setReceipts] = useState<Array<{ user_id: number; last_read_message_id: string }>>([]);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const lastTypingTimeRef = useRef<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -47,6 +67,13 @@ export default function ChatPage() {
     if (historyQ.data) setMessages([...historyQ.data].reverse());
   }, [historyQ.data]);
 
+  // Fetch read receipts whenever the room changes.
+  useEffect(() => {
+    setReceipts([]);
+    if (!rid) return;
+    chatApi.receipts(rid).then(setReceipts).catch(() => {});
+  }, [rid]);
+
   useEffect(() => {
     return () => {
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -54,7 +81,34 @@ export default function ChatPage() {
   }, []);
 
   const onWsMessage = useCallback((m: ChatMessage) => {
-    setMessages((prev) => (prev.some((p) => p.id === m.id) ? prev : [...prev, m]));
+    setMessages((prev) => {
+      // When the server echoes back our own sent message, replace the temp optimistic entry.
+      if (m.sender_id === me?.id && !m.id.startsWith("temp-")) {
+        const tempIdx = prev.findIndex((p) => p.id.startsWith("temp-") && p.sender_id === me.id);
+        if (tempIdx >= 0) {
+          const updated = [...prev];
+          updated[tempIdx] = m;
+          return updated;
+        }
+      }
+      return prev.some((p) => p.id === m.id) ? prev : [...prev, m];
+    });
+    // When actively in the room and someone else sends a message, advance our read cursor.
+    if (m.sender_id !== me?.id && rid && !m.id.startsWith("temp-")) {
+      chatApi.markRead(rid, m.id).catch(() => {});
+    }
+  }, [me?.id, rid]);
+
+  const onReadReceiptUpdate = useCallback((receipt: ReadReceiptEvent) => {
+    setReceipts((prev) => {
+      const idx = prev.findIndex((r) => r.user_id === receipt.user_id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = receipt;
+        return updated;
+      }
+      return [...prev, receipt];
+    });
   }, []);
   
   const onTyping = useCallback((users: TypingUser[]) => {
@@ -76,7 +130,7 @@ export default function ChatPage() {
     }, 3000);
   }, [me?.id]);
   
-  const { ready, send, sendTyping } = useChatSocket(rid, onWsMessage, onTyping);
+  const { ready, send, sendTyping } = useChatSocket(rid, onWsMessage, onTyping, onReadReceiptUpdate);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -162,6 +216,16 @@ export default function ChatPage() {
 
   const currentRoom = roomsQ.data?.find((r) => r.id === rid) ?? null;
 
+  const lastMyMsgIdx = messages.reduce((last, m, i) => (m.sender_id === me?.id ? i : last), -1);
+
+  const getMessageStatus = (msg: ChatMessage): TickStatus => {
+    if (msg.id.startsWith("temp-")) return "sent";
+    const hasRead = receipts.some(
+      (r) => r.user_id !== me?.id && r.last_read_message_id >= msg.id,
+    );
+    return hasRead ? "read" : "delivered";
+  };
+
   return (
     <main className="max-w-5xl mx-auto px-4 py-6 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 h-[calc(100vh-7rem)]">
       <aside className="bg-white rounded-lg shadow border p-3 overflow-y-auto">
@@ -220,18 +284,22 @@ export default function ChatPage() {
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-2">
           {rid == null && <p className="text-slate-500 text-sm">Pick a friend on the left to start chatting.</p>}
-          {messages.map((m) => {
+          {messages.map((m, idx) => {
             const mine = m.sender_id === me?.id;
+            const isLastMine = mine && idx === lastMyMsgIdx;
             return (
               <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm ${mine ? "bg-blue-600 text-white" : "bg-slate-100"}`}>
-                  {m.content && <div className="whitespace-pre-wrap">{m.content}</div>}
-                  {m.media_url && m.media_type === "image" && (
-                    <img src={m.media_url} className="mt-1 rounded max-w-xs" />
-                  )}
-                  {m.media_url && m.media_type === "video" && (
-                    <video src={m.media_url} controls className="mt-1 rounded max-w-xs" />
-                  )}
+                <div className={mine ? "flex flex-col items-end" : ""}>
+                  <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-sm ${mine ? "bg-blue-600 text-white" : "bg-slate-100"}`}>
+                    {m.content && <div className="whitespace-pre-wrap">{m.content}</div>}
+                    {m.media_url && m.media_type === "image" && (
+                      <img src={m.media_url} className="mt-1 rounded max-w-xs" />
+                    )}
+                    {m.media_url && m.media_type === "video" && (
+                      <video src={m.media_url} controls className="mt-1 rounded max-w-xs" />
+                    )}
+                  </div>
+                  {isLastMine && <MessageTick status={getMessageStatus(m)} />}
                 </div>
               </div>
             );

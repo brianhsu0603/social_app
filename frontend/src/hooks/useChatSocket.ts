@@ -7,14 +7,19 @@ export interface TypingUser {
   timestamp: number;
 }
 
+export interface ReadReceiptEvent {
+  user_id: number;
+  last_read_message_id: string;
+}
+
 export function useChatSocket(
   roomId: number | null,
   onMessage: (m: ChatMessage) => void,
-  onTyping?: (users: TypingUser[]) => void
+  onTyping?: (users: TypingUser[]) => void,
+  onReadReceipt?: (receipt: ReadReceiptEvent) => void,
 ) {
   const wsRef = useRef<WebSocket | null>(null);
   const [ready, setReady] = useState(false);
-  const typingTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
     if (roomId == null) return;
@@ -32,12 +37,14 @@ export function useChatSocket(
       try {
         const data = JSON.parse(e.data);
         if (data.type === "typing") {
-          // Handle typing event
           if (onTyping) {
             onTyping([{ user_id: data.user_id, timestamp: Date.now() }]);
           }
+        } else if (data.type === "read_receipt") {
+          if (onReadReceipt) {
+            onReadReceipt({ user_id: data.user_id, last_read_message_id: data.last_read_message_id });
+          }
         } else {
-          // Handle regular message
           onMessage(data as ChatMessage);
         }
       } catch {
@@ -49,7 +56,7 @@ export function useChatSocket(
       ws.close();
       wsRef.current = null;
     };
-  }, [roomId, onMessage, onTyping]);
+  }, [roomId, onMessage, onTyping, onReadReceipt]);
 
   function send(content: string, media?: { url: string; media_type: "image" | "video" }) {
     const ws = wsRef.current;

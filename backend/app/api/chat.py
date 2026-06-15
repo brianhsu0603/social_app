@@ -112,7 +112,13 @@ async def history(
         room_id, limit=limit, before_id=before_id
     )
     if messages:
-        await read_receipt_service.mark_read(room_id, current.id, messages[0]["id"])
+        newest_id = messages[0]["id"]
+        await read_receipt_service.mark_read(room_id, current.id, newest_id)
+        await manager.broadcast(room_id, {
+            "type": "read_receipt",
+            "user_id": current.id,
+            "last_read_message_id": newest_id,
+        })
     return messages
 
 

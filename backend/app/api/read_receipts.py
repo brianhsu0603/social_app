@@ -5,6 +5,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.services import chat_service, read_receipt_service
+from app.services.ws_manager import manager
 
 router = APIRouter(tags=["chat"])
 
@@ -19,6 +20,11 @@ async def mark_room_read(
     if not chat_service.is_member(db, room_id, current.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member")
     await read_receipt_service.mark_read(room_id, current.id, message_id)
+    await manager.broadcast(room_id, {
+        "type": "read_receipt",
+        "user_id": current.id,
+        "last_read_message_id": message_id,
+    })
 
 
 @router.get("/chat/rooms/{room_id}/receipts")
