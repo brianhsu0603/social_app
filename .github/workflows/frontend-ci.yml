@@ -27,22 +27,28 @@ jobs:
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      packages: write
+      id-token: write   # required for OIDC → AWS
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
       - uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/social-frontend:latest
-            ghcr.io/${{ github.repository_owner }}/social-frontend:${{ github.sha }}
+            ${{ vars.ECR_FRONTEND_URL }}:latest
+            ${{ vars.ECR_FRONTEND_URL }}:${{ github.sha }}
           build-args: |
             VITE_API_URL=https://api.example.com
             VITE_WS_URL=wss://api.example.com

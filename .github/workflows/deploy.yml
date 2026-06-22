@@ -1,36 +1,88 @@
 name: deploy
 
 on:
+  # Fires after either CI workflow completes on main. A concurrency group
+  # ensures only one deploy runs at a time and cancels any pending one.
   workflow_run:
     workflows: ["backend-ci", "frontend-ci"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC → AWS
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with: { version: v1.30.0 }
 
-      - name: Write kubeconfig
+      # Generates a kubeconfig from the EKS cluster — no static kubeconfig
+      # secret needed. The OIDC role must have eks:DescribeCluster permission.
+      - name: Configure kubeconfig
+        run: aws eks update-kubeconfig --region ${{ vars.AWS_REGION }} --name ${{ vars.EKS_CLUSTER_NAME }}
+
+      # Substitute the REPLACE_WITH_ placeholders written into k8s manifests
+      # during the managed-services migration. Values come from GitHub Actions
+      # secrets / repository variables populated after `terraform apply`.
+      - name: Inject infrastructure values into manifests
+        env:
+          RDS_ENDPOINT:            ${{ secrets.RDS_ENDPOINT }}
+          DOCDB_ENDPOINT:          ${{ secrets.DOCDB_ENDPOINT }}
+          ELASTICACHE_ENDPOINT:    ${{ secrets.ELASTICACHE_ENDPOINT }}
+          MSK_BOOTSTRAP_BROKERS:   ${{ secrets.MSK_BOOTSTRAP_BROKERS }}
+          MEDIA_BUCKET_NAME:       ${{ vars.MEDIA_BUCKET_NAME }}
+          BACKUPS_BUCKET_NAME:     ${{ vars.BACKUPS_BUCKET_NAME }}
+          BACKEND_POD_ROLE_ARN:    ${{ secrets.BACKEND_POD_ROLE_ARN }}
+          ECR_BACKEND_URL:         ${{ vars.ECR_BACKEND_URL }}
+          ECR_FRONTEND_URL:        ${{ vars.ECR_FRONTEND_URL }}
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          for f in k8s/*.yaml; do
+            sed -i \
+              -e "s|REPLACE_WITH_RDS_ENDPOINT|${RDS_ENDPOINT}|g" \
+              -e "s|REPLACE_WITH_DOCDB_ENDPOINT|${DOCDB_ENDPOINT}|g" \
+              -e "s|REPLACE_WITH_ELASTICACHE_ENDPOINT|${ELASTICACHE_ENDPOINT}|g" \
+              -e "s|REPLACE_WITH_MSK_BOOTSTRAP_BROKERS|${MSK_BOOTSTRAP_BROKERS}|g" \
+              -e "s|REPLACE_WITH_MEDIA_BUCKET_NAME|${MEDIA_BUCKET_NAME}|g" \
+              -e "s|REPLACE_WITH_BACKUPS_BUCKET_NAME|${BACKUPS_BUCKET_NAME}|g" \
+              -e "s|REPLACE_WITH_BACKEND_POD_ROLE_ARN|${BACKEND_POD_ROLE_ARN}|g" \
+              -e "s|REPLACE_WITH_ECR_BACKEND_URL|${ECR_BACKEND_URL}|g" \
+              -e "s|REPLACE_WITH_ECR_FRONTEND_URL|${ECR_FRONTEND_URL}|g" \
+              "$f"
+          done
 
       - name: Apply manifests
         run: kubectl apply -f k8s/
 
-      - name: Roll deployments to pick up new :latest images
+      - name: Restart deployments to pull new images
         run: |
-          kubectl -n social rollout restart deployment/backend
-          kubectl -n social rollout restart deployment/events-worker
-          kubectl -n social rollout restart deployment/frontend
-          kubectl -n social rollout status deployment/backend --timeout=5m
-          kubectl -n social rollout status deployment/frontend --timeout=5m
+          kubectl -n social rollout restart \
+            deployment/backend \
+            deployment/events-worker \
+            deployment/transcode-worker \
+            deployment/frontend
+
+      - name: Wait for rollouts
+        run: |
+          kubectl -n social rollout status deployment/backend          --timeout=5m
+          kubectl -n social rollout status deployment/events-worker    --timeout=5m
+          kubectl -n social rollout status deployment/transcode-worker --timeout=5m
+          kubectl -n social rollout status deployment/frontend         --timeout=5m

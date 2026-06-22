@@ -1,26 +1,36 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: social
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: social-config
   namespace: social
 data:
   APP_ENV: production
-  # Backend talks to pgbouncer, not Postgres directly, so we don't blow past max_connections.
+
+  # Backend still talks to PgBouncer (in-cluster); PgBouncer talks to RDS.
   DATABASE_URL: postgresql+psycopg://social:social@pgbouncer:5432/social
-  # Mongo replica set connection string. Reads can hit secondaries.
-  MONGO_URL: mongodb://mongo-0.mongo:27017,mongo-1.mongo:27017,mongo-2.mongo:27017/?replicaSet=rs0&readPreference=secondaryPreferred
+
   MONGO_DB: social_chat
-  # Sentinels can be added by clients that support them; the plain Redis URL
-  # points to the primary StatefulSet pod (DNS for redis-0.redis resolves to it).
-  REDIS_URL: redis://redis-0.redis:6379/0
-  KAFKA_BOOTSTRAP_SERVERS: social-kafka-bootstrap:9092
+
   KAFKA_CHAT_TOPIC: chat.messages
   KAFKA_EVENTS_TOPIC: social.events
   KAFKA_CONSUMER_GROUP: social-app
-  MINIO_ENDPOINT: minio:9000
-  MINIO_PUBLIC_ENDPOINT: https://media.example.com
-  MINIO_BUCKET: media
-  MINIO_SECURE: "false"
+  # Replace with: terraform output -raw msk_bootstrap_brokers_sasl_scram
+  KAFKA_BOOTSTRAP_SERVERS: "REPLACE_WITH_MSK_BOOTSTRAP_BROKERS"
+  KAFKA_USERNAME: social
+
+  # S3 replaces MinIO. The backend pod IRSA role grants s3:PutObject/GetObject,
+  # so no access key is needed — the AWS SDK picks up credentials automatically.
+  MINIO_ENDPOINT: "s3.amazonaws.com"
+  # Replace with: terraform output -raw media_bucket_name
+  MINIO_BUCKET: "REPLACE_WITH_MEDIA_BUCKET_NAME"
+  MINIO_PUBLIC_ENDPOINT: "https://media.example.com"
+  MINIO_SECURE: "true"
+
   MEILI_URL: http://meilisearch:7700
   CORS_ORIGINS: "https://app.example.com"
 ---
@@ -31,14 +41,28 @@ metadata:
   namespace: social
 type: Opaque
 stringData:
-  SECRET_KEY: change-me-in-prod-please
+  # RDS credentials — used by PgBouncer
   POSTGRES_USER: social
-  POSTGRES_PASSWORD: social
+  POSTGRES_PASSWORD: REPLACE_WITH_RDS_PASSWORD
   POSTGRES_DB: social
-  MINIO_ACCESS_KEY: minioadmin
-  MINIO_SECRET_KEY: minioadmin
+
+  # DocumentDB connection string with TLS. Replace the endpoint and password.
+  # Download the RDS CA bundle into your container image:
+  #   curl -O https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+  # Replace with: terraform output -raw documentdb_endpoint
+  MONGO_URL: "mongodb://social:REPLACE_WITH_DOCDB_PASSWORD@REPLACE_WITH_DOCDB_ENDPOINT:27017/?tls=true&tlsCAFile=/etc/ssl/certs/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred"
+
+  # ElastiCache Redis with TLS + AUTH. Replace endpoint and auth token.
+  # Replace with: terraform output -raw elasticache_primary_endpoint
+  REDIS_URL: "rediss://:REPLACE_WITH_REDIS_AUTH_TOKEN@REPLACE_WITH_ELASTICACHE_ENDPOINT:6379/0"
+
+  # MSK SASL/SCRAM password
+  KAFKA_PASSWORD: REPLACE_WITH_MSK_PASSWORD
+
+  SECRET_KEY: change-me-in-prod-please
   MEILI_MASTER_KEY: change-me-in-prod-please
-  # Push provider creds. Empty values trigger the dry-run path in push_service.
+
+  # Push provider creds — empty values trigger dry-run logging in push_service.
   FCM_PROJECT_ID: ""
   FCM_ACCESS_TOKEN: ""
   APNS_JWT: ""

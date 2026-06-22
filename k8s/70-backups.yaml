@@ -1,5 +1,14 @@
-# Daily logical backup of Postgres → MinIO. Cheap, simple, restorable.
-# For real disaster recovery, layer in pgBackRest / WAL archiving for PITR.
+# Supplementary logical backups to S3.
+#
+# RDS automated backups handle point-in-time recovery (7-day retention,
+# configured in terraform/rds.tf). This CronJob adds an extra logical
+# pg_dump export to S3 — useful for cross-region restores or data audits.
+#
+# DocumentDB automated backups (terraform/documentdb.tf) cover MongoDB.
+# A separate mongodump job is not necessary.
+#
+# The backup pod uses the social-backend ServiceAccount, which has the
+# IRSA policy granting s3:PutObject on the backups bucket.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -16,18 +25,28 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          serviceAccountName: social-backend
           containers:
             - name: backup
               image: bitnami/postgresql:16
-              envFrom:
-                - secretRef: { name: social-secret }
               env:
-                - { name: PGHOST, value: postgres }
-                - { name: PGUSER, value: social }
-                - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_PASSWORD } } }
-                - { name: PGDATABASE, value: social }
-                - { name: AWS_ACCESS_KEY_ID, valueFrom: { secretKeyRef: { name: social-secret, key: MINIO_ACCESS_KEY } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: social-secret, key: MINIO_SECRET_KEY } } }
+                # PgBouncer sits in front of RDS; dump directly from RDS to
+                # avoid going through the pool. Set PGHOST to RDS endpoint.
+                - name: PGHOST
+                  value: "REPLACE_WITH_RDS_ENDPOINT"
+                - name: PGUSER
+                  valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_USER } }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_PASSWORD } }
+                - name: PGDATABASE
+                  valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_DB } }
+                - name: PGSSLMODE
+                  value: require
+                # Replace with: terraform output -raw backups_bucket_name
+                - name: BACKUPS_BUCKET
+                  value: "REPLACE_WITH_BACKUPS_BUCKET_NAME"
+                - name: AWS_DEFAULT_REGION
+                  value: "us-east-1"
               command:
                 - /bin/sh
                 - -c
@@ -35,46 +54,11 @@ spec:
                   set -euo pipefail
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   FILE=/tmp/social-$TS.sql.gz
-                  pg_dump --no-owner --no-privileges | gzip -9 > $FILE
-                  # mc is preinstalled in bitnami/postgresql? If not, swap to an image that has it.
-                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-                  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-                  chmod +x /usr/local/bin/mc
-                  mc alias set s3 http://minio:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
-                  mc mb --ignore-existing s3/backups
-                  mc cp $FILE s3/backups/postgres/
----
-# Mongo backup. Same idea.
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: mongo-backup
-  namespace: social
-spec:
-  schedule: "30 3 * * *"
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: backup
-              image: mongo:7
-              env:
-                - { name: AWS_ACCESS_KEY_ID, valueFrom: { secretKeyRef: { name: social-secret, key: MINIO_ACCESS_KEY } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: social-secret, key: MINIO_SECRET_KEY } } }
-              command:
-                - /bin/sh
-                - -c
-                - |
-                  set -euo pipefail
-                  TS=$(date -u +%Y%m%dT%H%M%SZ)
-                  mongodump --uri mongodb://mongo:27017 --gzip --archive=/tmp/mongo-$TS.gz
-                  apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-                  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-                  chmod +x /usr/local/bin/mc
-                  mc alias set s3 http://minio:9000 "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
-                  mc mb --ignore-existing s3/backups
-                  mc cp /tmp/mongo-$TS.gz s3/backups/mongo/
+                  pg_dump --no-owner --no-privileges | gzip -9 > "$FILE"
+                  # aws CLI is available in bitnami/postgresql; credentials come
+                  # from the IRSA-injected token on the ServiceAccount.
+                  aws s3 cp "$FILE" "s3://${BACKUPS_BUCKET}/postgres/$TS.sql.gz"
+                  rm "$FILE"
+              resources:
+                requests: { cpu: 100m, memory: 256Mi }
+                limits: { cpu: 500m, memory: 512Mi }

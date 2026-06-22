@@ -1,3 +1,14 @@
+# ServiceAccount for backend pods. The IRSA annotation lets EKS inject AWS
+# credentials so pods can access S3 and Secrets Manager without static keys.
+# Replace the role ARN with: terraform output -raw backend_pod_role_arn
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: social-backend
+  namespace: social
+  annotations:
+    eks.amazonaws.com/role-arn: "REPLACE_WITH_BACKEND_POD_ROLE_ARN"
+---
 # Migration job runs to completion every deploy (alembic is idempotent).
 apiVersion: batch/v1
 kind: Job
@@ -9,9 +20,10 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: social-backend
       containers:
         - name: migrate
-          image: ghcr.io/your-org/social-backend:latest
+          image: REPLACE_WITH_ECR_BACKEND_URL:latest
           command: ["alembic", "upgrade", "head"]
           envFrom:
             - configMapRef: { name: social-config }
@@ -37,6 +49,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
     spec:
+      serviceAccountName: social-backend
       # Give the pod time to drain in-flight requests before SIGKILL.
       terminationGracePeriodSeconds: 60
       topologySpreadConstraints:
@@ -54,7 +67,7 @@ spec:
                 labelSelector: { matchLabels: { app: backend } }
       containers:
         - name: backend
-          image: ghcr.io/your-org/social-backend:latest
+          image: REPLACE_WITH_ECR_BACKEND_URL:latest
           ports: [{ containerPort: 8000 }]
           envFrom:
             - configMapRef: { name: social-config }
@@ -64,6 +77,9 @@ spec:
               value: http://jaeger:4318
             - name: OTEL_SERVICE_NAME
               value: social-backend
+            # MSK SASL/SCRAM password — username comes from social-config ConfigMap
+            - name: KAFKA_PASSWORD
+              valueFrom: { secretKeyRef: { name: social-secret, key: KAFKA_PASSWORD } }
           readinessProbe:
             httpGet: { path: /ready, port: 8000 }
             initialDelaySeconds: 5
@@ -146,14 +162,18 @@ spec:
   template:
     metadata: { labels: { app: events-worker } }
     spec:
+      serviceAccountName: social-backend
       terminationGracePeriodSeconds: 30
       containers:
         - name: worker
-          image: ghcr.io/your-org/social-backend:latest
+          image: REPLACE_WITH_ECR_BACKEND_URL:latest
           command: ["python", "-m", "app.workers.events_consumer"]
           envFrom:
             - configMapRef: { name: social-config }
             - secretRef: { name: social-secret }
+          env:
+            - name: KAFKA_PASSWORD
+              valueFrom: { secretKeyRef: { name: social-secret, key: KAFKA_PASSWORD } }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: 1, memory: 1Gi }
@@ -176,14 +196,22 @@ spec:
   template:
     metadata: { labels: { app: transcode-worker } }
     spec:
+      serviceAccountName: social-backend
+      tolerations:
+        - key: workload
+          value: compute
+          effect: NoSchedule
       terminationGracePeriodSeconds: 60
       containers:
         - name: worker
-          image: ghcr.io/your-org/social-backend:latest
+          image: REPLACE_WITH_ECR_BACKEND_URL:latest
           command: ["python", "-m", "app.workers.transcode_worker"]
           envFrom:
             - configMapRef: { name: social-config }
             - secretRef: { name: social-secret }
+          env:
+            - name: KAFKA_PASSWORD
+              valueFrom: { secretKeyRef: { name: social-secret, key: KAFKA_PASSWORD } }
           # ffmpeg is CPU and RAM heavy; tune for your media sizes.
           resources:
             requests: { cpu: 500m, memory: 1Gi }
