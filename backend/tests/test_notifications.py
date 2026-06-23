@@ -8,6 +8,7 @@ from app.models import Notification, Post
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_post(db, author):
     p = Post(author_id=author.id, content="test post")
     db.add(p)
@@ -34,6 +35,7 @@ def _make_notification(db, recipient, actor, post, notif_type="like", read=False
 # GET /notifications
 # ---------------------------------------------------------------------------
 
+
 class TestListNotifications:
     def test_empty_response_when_no_notifications(self, client):
         r = client.get("/notifications")
@@ -47,7 +49,9 @@ class TestListNotifications:
     ):
         client_a = make_client(user_a)
         post = _make_post(db, user_a)
-        _make_notification(db, recipient=user_a, actor=user_b, post=post, notif_type="like")
+        _make_notification(
+            db, recipient=user_a, actor=user_b, post=post, notif_type="like"
+        )
         r = client_a.get("/notifications")
         data = r.json()
         assert len(data["notifications"]) == 1
@@ -66,9 +70,7 @@ class TestListNotifications:
         r = client_b.get("/notifications")
         assert r.json()["notifications"] == []
 
-    def test_unread_count_reflects_only_unread(
-        self, db, make_client, user_a, user_b
-    ):
+    def test_unread_count_reflects_only_unread(self, db, make_client, user_a, user_b):
         client_a = make_client(user_a)
         post = _make_post(db, user_a)
         _make_notification(db, recipient=user_a, actor=user_b, post=post, read=False)
@@ -77,9 +79,7 @@ class TestListNotifications:
         r = client_a.get("/notifications")
         assert r.json()["unread_count"] == 2
 
-    def test_notifications_ordered_newest_first(
-        self, db, make_client, user_a, user_b
-    ):
+    def test_notifications_ordered_newest_first(self, db, make_client, user_a, user_b):
         client_a = make_client(user_a)
         post = _make_post(db, user_a)
         _make_notification(db, recipient=user_a, actor=user_b, post=post)
@@ -101,6 +101,7 @@ class TestListNotifications:
 # ---------------------------------------------------------------------------
 # PATCH /notifications/{notification_id}/read
 # ---------------------------------------------------------------------------
+
 
 class TestMarkOneRead:
     def test_marks_notification_as_read(self, db, make_client, user_a, user_b):
@@ -126,7 +127,9 @@ class TestMarkOneRead:
         r = client_b.patch(f"/notifications/{n.id}/read")
         assert r.status_code == 204  # silently ignored
         db.refresh(n)
-        assert n.read is False  # ownership check: user_b can't read user_a's notification
+        assert (
+            n.read is False
+        )  # ownership check: user_b can't read user_a's notification
 
     def test_already_read_notification_stays_read(
         self, db, make_client, user_a, user_b
@@ -143,6 +146,7 @@ class TestMarkOneRead:
 # ---------------------------------------------------------------------------
 # POST /notifications/read-all
 # ---------------------------------------------------------------------------
+
 
 class TestMarkAllRead:
     def test_marks_all_notifications_read(self, db, make_client, user_a, user_b):
@@ -167,9 +171,7 @@ class TestMarkAllRead:
         db.refresh(n)
         assert n.read is False  # user_a's notification untouched
 
-    def test_unread_count_is_zero_after_mark_all(
-        self, db, make_client, user_a, user_b
-    ):
+    def test_unread_count_is_zero_after_mark_all(self, db, make_client, user_a, user_b):
         client_a = make_client(user_a)
         post = _make_post(db, user_a)
         _make_notification(db, recipient=user_a, actor=user_b, post=post)

@@ -1,8 +1,8 @@
 from io import BytesIO
-from minio import Minio
-from minio.error import S3Error
 
 from app.core.config import settings
+from minio import Minio
+from minio.error import S3Error
 
 _client: Minio | None = None
 

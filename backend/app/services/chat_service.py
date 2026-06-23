@@ -37,7 +37,7 @@ async def persist_and_fan_out(
     sender_id: int,
     content: str,
     media_url: str | None,
-    media_type: str | None
+    media_type: str | None,
 ) -> dict[str, Any]:
     doc = {
         "room_id": room_id,

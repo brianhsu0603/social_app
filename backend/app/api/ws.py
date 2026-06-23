@@ -33,17 +33,22 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
             await websocket.close(code=4401)
             return
         user_id = user.id
-        notification_unread = db.scalar(
-            select(func.count(Notification.id)).where(
-                Notification.recipient_id == user_id,
-                Notification.read.is_(False),
+        notification_unread = (
+            db.scalar(
+                select(func.count(Notification.id)).where(
+                    Notification.recipient_id == user_id,
+                    Notification.read.is_(False),
+                )
             )
-        ) or 0
+            or 0
+        )
     finally:
         db.close()
 
     await websocket.accept()
-    await websocket.send_json({"type": "init", "notification_unread": notification_unread})
+    await websocket.send_json(
+        {"type": "init", "notification_unread": notification_unread}
+    )
 
     redis = get_redis()
     pubsub = redis.pubsub()
@@ -55,7 +60,9 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
     async def _relay() -> None:
         try:
             while not stop.is_set():
-                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
                 if msg and msg.get("type") == "message":
                     await websocket.send_text(msg["data"])
         except Exception:

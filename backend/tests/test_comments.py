@@ -8,6 +8,7 @@ from app.models import Notification
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _create_post(client, content="A post"):
     r = client.post("/posts", json={"content": content, "media": []})
     assert r.status_code == 201
@@ -23,6 +24,7 @@ def _add_comment(client, post_id, content="A comment"):
 # ---------------------------------------------------------------------------
 # GET /posts/{post_id}/comments
 # ---------------------------------------------------------------------------
+
 
 class TestListComments:
     def test_returns_empty_list_when_no_comments(self, client):
@@ -45,6 +47,7 @@ class TestListComments:
 
     def test_limit_parameter_capped_at_200(self, db, client, user_a):
         from app.models import Comment, Post
+
         # Create 205 comments directly in DB to avoid a slow HTTP loop
         p = db.get(Post, _create_post(client)["id"])
         for i in range(205):
@@ -58,6 +61,7 @@ class TestListComments:
 # ---------------------------------------------------------------------------
 # POST /posts/{post_id}/comments
 # ---------------------------------------------------------------------------
+
 
 class TestAddComment:
     def test_creates_comment_with_correct_fields(self, client):
@@ -108,15 +112,20 @@ class TestAddComment:
         post = _create_post(client_a)
         _add_comment(client_a, post["id"], "Self comment")
 
-        notifs = db.execute(
-            select(Notification).where(Notification.recipient_id == user_a.id)
-        ).scalars().all()
+        notifs = (
+            db.execute(
+                select(Notification).where(Notification.recipient_id == user_a.id)
+            )
+            .scalars()
+            .all()
+        )
         assert notifs == []
 
 
 # ---------------------------------------------------------------------------
 # PATCH /comments/{comment_id}
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateComment:
     def test_author_can_update_content(self, client):
@@ -142,6 +151,7 @@ class TestUpdateComment:
 # ---------------------------------------------------------------------------
 # DELETE /comments/{comment_id}
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteComment:
     def test_author_can_delete_comment(self, client):

@@ -12,7 +12,6 @@ from typing import Awaitable, Callable, Optional
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import KafkaError
-
 from app.core.config import settings
 
 log = logging.getLogger(__name__)

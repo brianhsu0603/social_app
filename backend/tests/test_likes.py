@@ -8,6 +8,7 @@ from app.models import Notification
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _create_post(client, content="A post"):
     r = client.post("/posts", json={"content": content, "media": []})
     assert r.status_code == 201
@@ -17,6 +18,7 @@ def _create_post(client, content="A post"):
 # ---------------------------------------------------------------------------
 # POST /posts/{post_id}/like
 # ---------------------------------------------------------------------------
+
 
 class TestLikePost:
     def test_like_returns_204(self, client):
@@ -66,9 +68,13 @@ class TestLikePost:
         post = _create_post(client_a)
         client_a.post(f"/posts/{post['id']}/like")
 
-        notifs = db.execute(
-            select(Notification).where(Notification.recipient_id == user_a.id)
-        ).scalars().all()
+        notifs = (
+            db.execute(
+                select(Notification).where(Notification.recipient_id == user_a.id)
+            )
+            .scalars()
+            .all()
+        )
         assert notifs == []
 
     def test_liked_by_me_true_after_like(self, client):
@@ -81,6 +87,7 @@ class TestLikePost:
 # ---------------------------------------------------------------------------
 # DELETE /posts/{post_id}/like
 # ---------------------------------------------------------------------------
+
 
 class TestUnlikePost:
     def test_unlike_returns_204(self, client):
@@ -113,6 +120,7 @@ class TestUnlikePost:
 # GET /posts/{post_id}/likes/count
 # ---------------------------------------------------------------------------
 
+
 class TestLikeCount:
     def test_count_zero_for_new_post(self, client):
         post = _create_post(client)
@@ -120,9 +128,7 @@ class TestLikeCount:
         assert r.status_code == 200
         assert r.json() == {"post_id": post["id"], "count": 0}
 
-    def test_count_increments_with_each_unique_liker(
-        self, make_client, user_a, user_b
-    ):
+    def test_count_increments_with_each_unique_liker(self, make_client, user_a, user_b):
         client_a = make_client(user_a)
         client_b = make_client(user_b)
         post = _create_post(client_a)

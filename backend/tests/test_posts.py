@@ -5,6 +5,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _create_post(client, content="Hello world", media=None):
     r = client.post("/posts", json={"content": content, "media": media or []})
     assert r.status_code == 201
@@ -14,6 +15,7 @@ def _create_post(client, content="Hello world", media=None):
 # ---------------------------------------------------------------------------
 # POST /posts
 # ---------------------------------------------------------------------------
+
 
 class TestCreatePost:
     def test_returns_201_with_correct_fields(self, client):
@@ -27,10 +29,13 @@ class TestCreatePost:
         assert data["author"]["username"] == "alice"
 
     def test_creates_post_with_media_attachments(self, client):
-        r = client.post("/posts", json={
-            "content": "Photo post",
-            "media": [{"url": "http://example.com/img.jpg", "media_type": "image"}],
-        })
+        r = client.post(
+            "/posts",
+            json={
+                "content": "Photo post",
+                "media": [{"url": "http://example.com/img.jpg", "media_type": "image"}],
+            },
+        )
         assert r.status_code == 201
         media = r.json()["media"]
         assert len(media) == 1
@@ -39,13 +44,16 @@ class TestCreatePost:
         assert media[0]["position"] == 0
 
     def test_media_positions_assigned_in_order(self, client):
-        r = client.post("/posts", json={
-            "content": "",
-            "media": [
-                {"url": "http://example.com/a.jpg", "media_type": "image"},
-                {"url": "http://example.com/b.mp4", "media_type": "video"},
-            ],
-        })
+        r = client.post(
+            "/posts",
+            json={
+                "content": "",
+                "media": [
+                    {"url": "http://example.com/a.jpg", "media_type": "image"},
+                    {"url": "http://example.com/b.mp4", "media_type": "video"},
+                ],
+            },
+        )
         media = r.json()["media"]
         assert [m["position"] for m in media] == [0, 1]
 
@@ -58,16 +66,20 @@ class TestCreatePost:
         assert r.status_code == 422
 
     def test_invalid_media_type_rejected(self, client):
-        r = client.post("/posts", json={
-            "content": "bad",
-            "media": [{"url": "http://example.com/f.gif", "media_type": "gif"}],
-        })
+        r = client.post(
+            "/posts",
+            json={
+                "content": "bad",
+                "media": [{"url": "http://example.com/f.gif", "media_type": "gif"}],
+            },
+        )
         assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------
 # GET /posts/{post_id}
 # ---------------------------------------------------------------------------
+
 
 class TestGetPost:
     def test_returns_post_by_id(self, client):
@@ -82,6 +94,7 @@ class TestGetPost:
 
     def test_like_count_reflects_existing_likes(self, db, client, user_a):
         from app.models import Like
+
         post = _create_post(client, "Liked post")
         db.add(Like(post_id=post["id"], user_id=user_a.id))
         db.commit()
@@ -91,13 +104,16 @@ class TestGetPost:
 
     def test_comment_count_reflects_existing_comments(self, db, client, user_a):
         from app.models import Comment
+
         post = _create_post(client, "Commented post")
         db.add(Comment(post_id=post["id"], author_id=user_a.id, content="hi"))
         db.commit()
         r = client.get(f"/posts/{post['id']}")
         assert r.json()["comment_count"] == 1
 
-    def test_liked_by_me_false_for_other_users_like(self, db, make_client, user_a, user_b):
+    def test_liked_by_me_false_for_other_users_like(
+        self, db, make_client, user_a, user_b
+    ):
         client_a = make_client(user_a)
         client_b = make_client(user_b)
         post = _create_post(client_a)
@@ -109,6 +125,7 @@ class TestGetPost:
 # ---------------------------------------------------------------------------
 # PATCH /posts/{post_id}
 # ---------------------------------------------------------------------------
+
 
 class TestUpdatePost:
     def test_author_can_update_content(self, client):
@@ -133,6 +150,7 @@ class TestUpdatePost:
 # DELETE /posts/{post_id}
 # ---------------------------------------------------------------------------
 
+
 class TestDeletePost:
     def test_author_can_delete_post(self, client):
         post = _create_post(client)
@@ -155,6 +173,7 @@ class TestDeletePost:
 # ---------------------------------------------------------------------------
 # GET /posts/user/{user_id}
 # ---------------------------------------------------------------------------
+
 
 class TestListUserPosts:
     def test_returns_all_posts_for_user(self, client, user_a):

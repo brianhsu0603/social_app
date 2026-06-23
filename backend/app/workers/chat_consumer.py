@@ -25,11 +25,15 @@ async def _handle(msg: dict) -> None:
     sender_id = msg.get("sender_id")
     try:
         with SessionLocal() as db:
-            member_ids = db.execute(
-                select(ChatRoomMember.user_id).where(
-                    ChatRoomMember.room_id == room_id
+            member_ids = (
+                db.execute(
+                    select(ChatRoomMember.user_id).where(
+                        ChatRoomMember.room_id == room_id
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         for uid in member_ids:
             if uid != sender_id:
                 await notification_push.push(

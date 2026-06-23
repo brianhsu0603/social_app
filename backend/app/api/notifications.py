@@ -15,12 +15,16 @@ def list_notifications(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> NotificationListOut:
-    rows = db.execute(
-        select(Notification)
-        .where(Notification.recipient_id == current.id)
-        .order_by(Notification.id.desc())
-        .limit(50)
-    ).scalars().all()
+    rows = (
+        db.execute(
+            select(Notification)
+            .where(Notification.recipient_id == current.id)
+            .order_by(Notification.id.desc())
+            .limit(50)
+        )
+        .scalars()
+        .all()
+    )
 
     items = []
     for n in rows:
