@@ -53,15 +53,18 @@ resource "aws_secretsmanager_secret_version" "documentdb" {
   })
 }
 
+# MSK requires a customer-managed KMS key (not the AWS managed alias)
+resource "aws_kms_key" "msk" {
+  description             = "KMS key for MSK SCRAM secret"
+  deletion_window_in_days = 7
+}
+
 # MSK SCRAM secret must follow the AmazonMSK_-prefixed naming convention
-# and use the AWSManagedMSKSecret KMS key so MSK can read it.
 resource "aws_secretsmanager_secret" "msk" {
   name                    = "AmazonMSK_${local.name}"
   description             = "MSK SASL/SCRAM credentials"
   recovery_window_in_days = 7
-
-  # MSK requires this specific KMS key alias
-  kms_key_id = "alias/aws/secretsmanager"
+  kms_key_id              = aws_kms_key.msk.key_id
 }
 
 resource "aws_secretsmanager_secret_version" "msk" {

@@ -9,11 +9,6 @@ resource "aws_elasticache_parameter_group" "redis" {
   family = "redis7"
 
   parameter {
-    name  = "appendonly"
-    value = "yes"
-  }
-
-  parameter {
     name  = "maxmemory-policy"
     value = "allkeys-lru"
   }
@@ -25,7 +20,7 @@ resource "aws_elasticache_parameter_group" "redis" {
 #   rediss://:${auth_token}@${primary_endpoint}:6379/0
 resource "aws_elasticache_replication_group" "redis" {
   replication_group_id = local.name
-  description          = "Social app Redis — presence, feed cache, rate limiting, pub/sub"
+  description          = "Social app Redis - presence, feed cache, rate limiting, pub/sub"
 
   node_type            = var.elasticache_node_type
   num_cache_clusters   = 3

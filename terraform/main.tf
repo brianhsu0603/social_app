@@ -21,7 +21,7 @@ terraform {
   #       --key-schema AttributeName=LockID,KeyType=HASH \
   #       --billing-mode PAY_PER_REQUEST
   backend "s3" {
-    bucket         = "social-app-terraform-state"
+    bucket         = "social-app-terraform-state-995679261252"
     key            = "social-app/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "social-app-terraform-lock"

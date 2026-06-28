@@ -70,7 +70,7 @@ resource "aws_security_group_rule" "nodes_to_cluster_443" {
 
 resource "aws_security_group" "rds" {
   name        = "${local.name}-rds"
-  description = "RDS PostgreSQL — EKS nodes only"
+  description = "RDS PostgreSQL - EKS nodes only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -94,7 +94,7 @@ resource "aws_security_group" "rds" {
 
 resource "aws_security_group" "elasticache" {
   name        = "${local.name}-elasticache"
-  description = "ElastiCache Redis — EKS nodes only"
+  description = "ElastiCache Redis - EKS nodes only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -118,7 +118,7 @@ resource "aws_security_group" "elasticache" {
 
 resource "aws_security_group" "documentdb" {
   name        = "${local.name}-documentdb"
-  description = "DocumentDB — EKS nodes only"
+  description = "DocumentDB - EKS nodes only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -142,7 +142,7 @@ resource "aws_security_group" "documentdb" {
 
 resource "aws_security_group" "msk" {
   name        = "${local.name}-msk"
-  description = "MSK Kafka — EKS nodes only"
+  description = "MSK Kafka - EKS nodes only"
   vpc_id      = aws_vpc.main.id
 
   # SASL/SCRAM + TLS (port 9096)

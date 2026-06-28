@@ -38,13 +38,13 @@ variable "eks_version" {
 variable "eks_general_instance_types" {
   description = "Instance types for the general-purpose node group (API pods, workers)"
   type        = list(string)
-  default     = ["m5.large"]
+  default     = ["t3.medium"]
 }
 
 variable "eks_compute_instance_types" {
   description = "Instance types for the compute node group (transcode workers)"
   type        = list(string)
-  default     = ["c5.2xlarge"]
+  default     = ["t3.large"]
 }
 
 # ── RDS ──────────────────────────────────────────────────────────────────────

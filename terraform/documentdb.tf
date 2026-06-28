@@ -16,7 +16,7 @@ resource "aws_docdb_subnet_group" "main" {
 
 resource "aws_docdb_cluster_parameter_group" "main" {
   name   = local.name
-  family = "docdb6.0"
+  family = "docdb5.0"
 
   parameter {
     name  = "tls"
@@ -33,7 +33,7 @@ resource "aws_docdb_cluster" "main" {
   cluster_identifier = local.name
 
   engine         = "docdb"
-  engine_version = "6.0.0"
+  engine_version = "5.0.0"
 
   master_username = var.docdb_username
   master_password = var.docdb_password
