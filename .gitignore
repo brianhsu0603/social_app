@@ -21,3 +21,7 @@ htmlcov/
 *.log
 .idea/
 .vscode/
+
+# Minikube manifests contain hardcoded local dev credentials — keep off GitHub.
+# Commit k8s/minikube/*.example.yaml stubs if you want to share the structure.
+k8s/minikube/
