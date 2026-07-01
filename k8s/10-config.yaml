@@ -67,3 +67,7 @@ stringData:
   FCM_ACCESS_TOKEN: ""
   APNS_JWT: ""
   APNS_BUNDLE_ID: ""
+
+  # Sentry — get the DSN from Settings > Projects > Client Keys in sentry.io.
+  # Leave empty to disable error tracking without changing any code.
+  SENTRY_DSN: ""

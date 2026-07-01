@@ -3,8 +3,11 @@ import logging
 import signal
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from app.api import (
     auth,
@@ -38,6 +41,26 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 log = logging.getLogger("social_app")
+
+# Sentry is opt-in: set SENTRY_DSN to enable. Blank DSN → SDK is never loaded,
+# so there is zero overhead in local dev and the test suite.
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.app_env,
+        integrations=[
+            # Captures unhandled exceptions in route handlers and sets the
+            # transaction name to the endpoint function name (low cardinality).
+            FastApiIntegration(transaction_style="endpoint"),
+            # Records slow / erroring queries as breadcrumbs on error events.
+            SqlalchemyIntegration(),
+        ],
+        # OTel + Jaeger is our primary distributed tracer. Keep Sentry's own
+        # trace sampling very low so we don't pay for duplicate spans.
+        traces_sample_rate=0.05,
+        send_default_pii=False,
+    )
+    log.info("Sentry enabled (env=%s)", settings.app_env)
 
 
 @asynccontextmanager
