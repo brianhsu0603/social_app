@@ -1,0 +1,63 @@
+# Local overlay — replaces k8s/10-config.yaml for a local cluster (OrbStack, kind, etc).
+# Points at the in-cluster Postgres/Mongo/Redis/Kafka/MinIO defined in this same
+# directory instead of RDS/DocumentDB/ElastiCache/MSK/S3. All values below are
+# throwaway dev credentials — this file is safe to commit but never reuse its
+# Secret values anywhere real.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: social-config
+  namespace: social
+data:
+  APP_ENV: development
+
+  DATABASE_URL: postgresql+psycopg://social:social@postgres:5432/social
+
+  MONGO_DB: social_chat
+
+  KAFKA_CHAT_TOPIC: chat.messages
+  KAFKA_EVENTS_TOPIC: social.events
+  KAFKA_CONSUMER_GROUP: social-app
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  # Backend SDK calls go to the in-cluster Service name; links handed to the
+  # browser (uploaded media URLs) use the localhost port OrbStack binds the
+  # minio LoadBalancer Service to.
+  MINIO_ENDPOINT: minio:9000
+  MINIO_BUCKET: media
+  MINIO_PUBLIC_ENDPOINT: http://localhost:9000
+  MINIO_SECURE: "false"
+
+  MEILI_URL: http://meilisearch:7700
+  CORS_ORIGINS: "http://localhost,http://localhost:5173"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: social-secret
+  namespace: social
+type: Opaque
+stringData:
+  POSTGRES_USER: social
+  POSTGRES_PASSWORD: social
+  POSTGRES_DB: social
+
+  MONGO_URL: "mongodb://mongo:27017"
+
+  REDIS_URL: "redis://redis:6379/0"
+
+  MINIO_ACCESS_KEY: minioadmin
+  MINIO_SECRET_KEY: minioadmin
+
+  SECRET_KEY: local-dev-secret-key
+  # Meilisearch's 25-meilisearch.yaml sets MEILI_ENV=production, which
+  # enforces a 16+ byte master key even locally — "masterKey" (9 bytes) fails.
+  MEILI_MASTER_KEY: local-dev-masterKey-01
+
+  # Empty values trigger dry-run logging in push_service — fine for local practice.
+  FCM_PROJECT_ID: ""
+  FCM_ACCESS_TOKEN: ""
+  APNS_JWT: ""
+  APNS_BUNDLE_ID: ""
+
+  SENTRY_DSN: ""

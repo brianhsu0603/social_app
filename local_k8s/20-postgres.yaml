@@ -1,0 +1,54 @@
+# In-cluster Postgres for local practice. Prod replaced this with RDS
+# (see k8s/20-postgres.yaml) and kept only PgBouncer in-cluster; PgBouncer
+# isn't needed here since there's no fleet of autoscaled backend pods
+# competing for connections against a single local Postgres.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: social
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: social
+spec:
+  replicas: 1
+  # ReadWriteOnce volume — a rolling update would leave two pods fighting
+  # over the same PVC, so recreate instead.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_PASSWORD } } }
+            - { name: POSTGRES_DB, valueFrom: { secretKeyRef: { name: social-secret, key: POSTGRES_DB } } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "social"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: postgres-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: social }
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]

@@ -1,0 +1,47 @@
+# Local frontend — replaces k8s/31-frontend.yaml with a locally-built image
+# instead of the ghcr.io one, and a LoadBalancer Service instead of relying
+# on an Ingress controller.
+#
+# VITE_API_URL/VITE_WS_URL are baked in at build time (see frontend/Dockerfile),
+# so they must point at wherever the backend LoadBalancer Service ends up —
+# localhost:8000 by default:
+#   docker build -t social-frontend:local \
+#     --build-arg VITE_API_URL=http://localhost:8000 \
+#     --build-arg VITE_WS_URL=ws://localhost:8000 \
+#     ./frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: social
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: social-frontend:local
+          imagePullPolicy: Never
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: social }
+spec:
+  type: LoadBalancer
+  selector: { app: frontend }
+  ports: [{ port: 80, targetPort: 80 }]

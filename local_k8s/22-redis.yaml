@@ -1,0 +1,48 @@
+# In-cluster Redis for local practice. Prod uses Redis Sentinel for HA
+# (see CLAUDE.md); a single instance is fine for exercising presence,
+# feed cache, rate limiting, and idempotency locally.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: social
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: social
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command: ["redis-server", "--appendonly", "yes"]
+          ports: [{ containerPort: 6379 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: redis-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: social }
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]

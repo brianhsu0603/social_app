@@ -1,0 +1,143 @@
+# Local backend — replaces k8s/30-backend.yaml. No IRSA ServiceAccount, no
+# ECR image, no HPA/PDB/topology spread (all tuned for a multi-node,
+# autoscaled fleet that doesn't exist on a single-node local cluster).
+#
+# Images reused from `docker compose build` (all built from ./backend with
+# the same Dockerfile, just tagged per-service) — OrbStack shares its image
+# store with its k8s cluster, so they're already visible here, no
+# registry/push needed. If you haven't run that, build directly instead:
+#   docker build -t social_app-backend:latest ./backend
+#
+# Service is LoadBalancer: OrbStack automatically binds LoadBalancer
+# Services to localhost, so the backend is reachable at localhost:8000
+# without an Ingress controller.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: social
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command: ["sh", "-c", "until pg_isready -h postgres -U social; do sleep 2; done"]
+      containers:
+        - name: migrate
+          image: social_app-backend:latest
+          imagePullPolicy: Never
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: social
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector: { matchLabels: { app: backend } }
+  template:
+    metadata:
+      labels: { app: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: backend
+          image: social_app-backend:latest
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          env:
+            # Only meaningful if you also apply k8s/50-observability.yaml.
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://jaeger:4318 }
+            - { name: OTEL_SERVICE_NAME, value: social-backend }
+          readinessProbe:
+            httpGet: { path: /ready, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          startupProbe:
+            httpGet: { path: /health, port: 8000 }
+            failureThreshold: 30
+            periodSeconds: 2
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1, memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backend, namespace: social }
+spec:
+  type: LoadBalancer
+  selector: { app: backend }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+# Each worker is its own Deployment, matching the prod topology, so you can
+# scale/kill them independently of the HTTP path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: events-worker
+  namespace: social
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: events-worker } }
+  template:
+    metadata: { labels: { app: events-worker } }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: social_app-events-worker:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "app.workers.events_consumer"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transcode-worker
+  namespace: social
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: transcode-worker } }
+  template:
+    metadata: { labels: { app: transcode-worker } }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: social_app-transcode-worker:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "app.workers.transcode_worker"]
+          envFrom:
+            - configMapRef: { name: social-config }
+            - secretRef: { name: social-secret }
+          # ffmpeg is CPU/RAM heavy even for small local test uploads.
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }

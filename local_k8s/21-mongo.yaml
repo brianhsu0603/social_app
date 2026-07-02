@@ -1,0 +1,47 @@
+# In-cluster MongoDB for local practice. Prod uses DocumentDB with TLS +
+# replicaSet=rs0 (see k8s/10-config.yaml) — no auth/TLS/replica set here,
+# matching the single-node dev setup in docker-compose.yml.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-data
+  namespace: social
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: social
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: mongo } }
+  template:
+    metadata: { labels: { app: mongo } }
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports: [{ containerPort: 27017 }]
+          volumeMounts:
+            - { name: data, mountPath: /data/db }
+          readinessProbe:
+            exec: { command: ["mongosh", "--eval", "db.adminCommand('ping')"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: mongo-data }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mongo, namespace: social }
+spec:
+  selector: { app: mongo }
+  ports: [{ port: 27017, targetPort: 27017 }]

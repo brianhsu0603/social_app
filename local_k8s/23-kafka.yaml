@@ -1,0 +1,58 @@
+# In-cluster single-broker KRaft Kafka for local practice — same image and
+# config as the `kafka` service in docker-compose.yml. Prod uses a 3-broker
+# Strimzi cluster with SASL/SCRAM (MSK); none of that applies here, so the
+# backend just talks PLAINTEXT to kafka:9092 with no auth.
+#
+# No PVC: topics/offsets are ephemeral. Chat messages themselves are
+# persisted in MongoDB regardless (see CLAUDE.md), so losing the Kafka log
+# on pod restart doesn't lose data, just in-flight fan-out.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: social
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: kafka } }
+  template:
+    metadata: { labels: { app: kafka } }
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.8.0
+          ports: [{ containerPort: 9092 }]
+          env:
+            - { name: KAFKA_NODE_ID, value: "1" }
+            - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
+            - { name: KAFKA_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093" }
+            - { name: KAFKA_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
+            - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT" }
+            - { name: KAFKA_INTER_BROKER_LISTENER_NAME, value: "PLAINTEXT" }
+            - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER" }
+            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
+            - { name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "true" }
+            - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
+            - { name: CLUSTER_ID, value: "MkU3OEVBNTcwNTJENDM2Qk" }
+          readinessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            # This spins up a full JVM each check; the default 1s exec-probe
+            # timeout isn't enough, which leaves the pod permanently
+            # NotReady (and the kafka Service with zero endpoints) even
+            # though the broker itself is up.
+            timeoutSeconds: 10
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 1, memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: kafka, namespace: social }
+spec:
+  selector: { app: kafka }
+  ports: [{ port: 9092, targetPort: 9092 }]
