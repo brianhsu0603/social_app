@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, user_from_token
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.observability import WS_CONNECTIONS
-from app.core.redis_client import get_redis
+from app.core.redis_client import pubsub_listen
 from app.models import ChatRoom, ChatRoomMember, User
 from app.schemas.chat import ChatMessageIn, ChatMessageOut, ChatRoomCreate, ChatRoomOut
 from app.services import chat_service, presence_service, read_receipt_service
@@ -217,25 +217,17 @@ async def _subscribe_typing(
 ) -> None:
     """Bridge Redis typing channel → this socket. One pubsub task per socket
     is wasteful at huge scale; for now it keeps the code simple."""
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    await pubsub.subscribe(presence_service.TYPING_CHANNEL.format(room_id=room_id))
-    try:
-        while not stop_event.is_set():
-            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            if msg and msg.get("type") == "message":
-                try:
-                    payload = json.loads(msg["data"])
-                    # Filter out current user's typing events
-                    if payload.get("user_id") == user_id:
-                        continue
-                except Exception:
-                    continue
-                try:
-                    await ws.send_json({"type": "typing", **payload})
-                except (WebSocketDisconnect, RuntimeError):
-                    stop_event.set()
-                    break
-    finally:
-        await pubsub.unsubscribe()
-        await pubsub.close()
+    channel = presence_service.TYPING_CHANNEL.format(room_id=room_id)
+    async for data in pubsub_listen(channel, stop_event):
+        try:
+            payload = json.loads(data)
+            # Filter out current user's typing events
+            if payload.get("user_id") == user_id:
+                continue
+        except Exception:
+            continue
+        try:
+            await ws.send_json({"type": "typing", **payload})
+        except (WebSocketDisconnect, RuntimeError):
+            stop_event.set()
+            break

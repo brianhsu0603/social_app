@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from app.api.deps import user_from_token
 from app.core.database import AsyncSessionLocal
-from app.core.redis_client import get_redis
+from app.core.redis_client import pubsub_listen
 from app.models import Notification
 from app.services.notification_push import USER_PUSH_CHANNEL
 
@@ -50,21 +50,13 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
     except WebSocketDisconnect:
         return
 
-    redis = get_redis()
-    pubsub = redis.pubsub()
     channel = USER_PUSH_CHANNEL.format(user_id=user_id)
-    await pubsub.subscribe(channel)
-
     stop = asyncio.Event()
 
     async def _relay() -> None:
         try:
-            while not stop.is_set():
-                msg = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
-                )
-                if msg and msg.get("type") == "message":
-                    await websocket.send_text(msg["data"])
+            async for data in pubsub_listen(channel, stop):
+                await websocket.send_text(data)
         except Exception:
             stop.set()
 
@@ -72,7 +64,7 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
         try:
             while True:
                 await websocket.receive_text()
-        except (WebSocketDisconnect, Exception):
+        except Exception:
             stop.set()
 
     relay = asyncio.create_task(_relay())
@@ -85,5 +77,3 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
         stop.set()
         relay.cancel()
         watch.cancel()
-        await pubsub.unsubscribe(channel)
-        await pubsub.close()
