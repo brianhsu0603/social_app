@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import AsyncSessionLocal
 from app.core.kafka_client import consume
 from app.models import ChatRoomMember
 from app.services import notification_push
@@ -24,11 +24,13 @@ async def _handle(msg: dict) -> None:
 
     sender_id = msg.get("sender_id")
     try:
-        with SessionLocal() as db:
+        async with AsyncSessionLocal() as db:
             member_ids = (
-                db.execute(
-                    select(ChatRoomMember.user_id).where(
-                        ChatRoomMember.room_id == room_id
+                (
+                    await db.execute(
+                        select(ChatRoomMember.user_id).where(
+                            ChatRoomMember.room_id == room_id
+                        )
                     )
                 )
                 .scalars()

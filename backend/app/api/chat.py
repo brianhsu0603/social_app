@@ -11,10 +11,10 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, user_from_token
-from app.core.database import SessionLocal, get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.core.observability import WS_CONNECTIONS
 from app.core.redis_client import get_redis
 from app.models import ChatRoom, ChatRoomMember, User
@@ -26,15 +26,19 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-async def _room_with_members(db: Session, room: ChatRoom, user_id: int) -> dict:
+async def _room_with_members(db: AsyncSession, room: ChatRoom, user_id: int) -> dict:
     member_ids = (
-        db.execute(
-            select(ChatRoomMember.user_id).where(ChatRoomMember.room_id == room.id)
+        (
+            await db.execute(
+                select(ChatRoomMember.user_id).where(ChatRoomMember.room_id == room.id)
+            )
         )
         .scalars()
         .all()
     )
-    members = list(db.execute(select(User).where(User.id.in_(member_ids))).scalars())
+    members = list(
+        (await db.execute(select(User).where(User.id.in_(member_ids)))).scalars()
+    )
     unread = await read_receipt_service.unread_count(room.id, user_id)
     return {
         "id": room.id,
@@ -50,41 +54,50 @@ async def _room_with_members(db: Session, room: ChatRoom, user_id: int) -> dict:
 @router.post("/rooms", response_model=ChatRoomOut, status_code=status.HTTP_201_CREATED)
 async def create_room(
     payload: ChatRoomCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
     member_ids = sorted(set(payload.member_ids) | {current.id})
     is_group = len(member_ids) > 2
 
     if not is_group and len(member_ids) == 2:
-        existing = db.execute(
-            select(ChatRoom)
-            .join(ChatRoomMember, ChatRoomMember.room_id == ChatRoom.id)
-            .where(ChatRoom.is_group.is_(False), ChatRoomMember.user_id.in_(member_ids))
-            .group_by(ChatRoom.id)
-            .having(func.count(ChatRoomMember.id) == 2)
+        existing = (
+            await db.execute(
+                select(ChatRoom)
+                .join(ChatRoomMember, ChatRoomMember.room_id == ChatRoom.id)
+                .where(
+                    ChatRoom.is_group.is_(False),
+                    ChatRoomMember.user_id.in_(member_ids),
+                )
+                .group_by(ChatRoom.id)
+                .having(func.count(ChatRoomMember.id) == 2)
+            )
         ).scalar()
         if existing:
             return await _room_with_members(db, existing, current.id)
 
     room = ChatRoom(name=payload.name, is_group=is_group, created_by=current.id)
     db.add(room)
-    db.flush()
+    await db.flush()
     for uid in member_ids:
         db.add(ChatRoomMember(room_id=room.id, user_id=uid))
-    db.commit()
-    db.refresh(room)
+    await db.commit()
+    await db.refresh(room)
     return await _room_with_members(db, room, current.id)
 
 
 @router.get("/rooms", response_model=list[ChatRoomOut])
 async def list_my_rooms(
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
     room_ids = (
-        db.execute(
-            select(ChatRoomMember.room_id).where(ChatRoomMember.user_id == current.id)
+        (
+            await db.execute(
+                select(ChatRoomMember.room_id).where(
+                    ChatRoomMember.user_id == current.id
+                )
+            )
         )
         .scalars()
         .all()
@@ -92,7 +105,7 @@ async def list_my_rooms(
     if not room_ids:
         return []
     rooms = list(
-        db.execute(select(ChatRoom).where(ChatRoom.id.in_(room_ids))).scalars()
+        (await db.execute(select(ChatRoom).where(ChatRoom.id.in_(room_ids)))).scalars()
     )
     rooms.sort(key=lambda r: r.id, reverse=True)
     return [await _room_with_members(db, r, current.id) for r in rooms]
@@ -103,10 +116,10 @@ async def history(
     room_id: int,
     limit: int = 50,
     before_id: str | None = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
-    if not chat_service.is_member(db, room_id, current.id):
+    if not await chat_service.is_member(db, room_id, current.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member")
     messages = await chat_service.list_history(
         room_id, limit=limit, before_id=before_id
@@ -133,12 +146,12 @@ async def history(
 async def send_message_rest(
     room_id: int,
     payload: ChatMessageIn,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
     if payload.room_id != room_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "room_id mismatch")
-    if not chat_service.is_member(db, room_id, current.id):
+    if not await chat_service.is_member(db, room_id, current.id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not a member")
     msg = await chat_service.persist_and_fan_out(
         room_id=room_id,
@@ -153,14 +166,11 @@ async def send_message_rest(
 
 @router.websocket("/ws/{room_id}")
 async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
-    db = SessionLocal()
-    try:
-        user = user_from_token(token, db)
-        if not user or not chat_service.is_member(db, room_id, user.id):
+    async with AsyncSessionLocal() as db:
+        user = await user_from_token(token, db)
+        if not user or not await chat_service.is_member(db, room_id, user.id):
             await websocket.close(code=4401)
             return
-    finally:
-        db.close()
 
     await manager.connect(room_id, websocket)
     WS_CONNECTIONS.labels("chat").inc()

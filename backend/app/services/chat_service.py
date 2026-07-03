@@ -14,7 +14,7 @@ from typing import Any
 
 from bson import ObjectId
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.kafka_client import publish
@@ -24,11 +24,11 @@ from app.models import ChatRoom, ChatRoomMember
 COLLECTION = "messages"
 
 
-def is_member(db: Session, room_id: int, user_id: int) -> bool:
+async def is_member(db: AsyncSession, room_id: int, user_id: int) -> bool:
     stmt = select(ChatRoomMember.id).where(
         ChatRoomMember.room_id == room_id, ChatRoomMember.user_id == user_id
     )
-    return db.scalar(stmt) is not None
+    return (await db.scalar(stmt)) is not None
 
 
 async def persist_and_fan_out(
@@ -83,8 +83,8 @@ def _serialize(doc: dict) -> dict:
     }
 
 
-def ensure_room(db: Session, room_id: int) -> ChatRoom:
-    room = db.get(ChatRoom, room_id)
+async def ensure_room(db: AsyncSession, room_id: int) -> ChatRoom:
+    room = await db.get(ChatRoom, room_id)
     if not room:
         raise ValueError("room not found")
     return room

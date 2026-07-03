@@ -12,7 +12,7 @@ import logging
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.database import SessionLocal
+from app.core.database import AsyncSessionLocal
 from app.core.kafka_client import consume_with_dlq
 from app.models import Comment, Friendship, FriendshipStatus, Post, User
 from app.services import push_service, search_service
@@ -21,12 +21,12 @@ log = logging.getLogger(__name__)
 
 
 async def _on_post_created(event: dict) -> None:
-    with SessionLocal() as db:
-        author = db.get(User, event["author_id"])
-        post = db.get(Post, event["post_id"])
+    async with AsyncSessionLocal() as db:
+        author = await db.get(User, event["author_id"])
+        post = await db.get(Post, event["post_id"])
         if not (author and post):
             return
-        friend_ids = _friend_ids(db, author.id)
+        friend_ids = await _friend_ids(db, author.id)
         if friend_ids:
             await push_service.deliver(
                 db,
@@ -39,14 +39,14 @@ async def _on_post_created(event: dict) -> None:
 
 
 async def _on_comment_created(event: dict) -> None:
-    with SessionLocal() as db:
-        comment = db.get(Comment, event["comment_id"])
+    async with AsyncSessionLocal() as db:
+        comment = await db.get(Comment, event["comment_id"])
         if not comment:
             return
-        post = db.get(Post, comment.post_id)
+        post = await db.get(Post, comment.post_id)
         if not post or post.author_id == comment.author_id:
             return
-        commenter = db.get(User, comment.author_id)
+        commenter = await db.get(User, comment.author_id)
         await push_service.deliver(
             db,
             [post.author_id],
@@ -57,10 +57,10 @@ async def _on_comment_created(event: dict) -> None:
 
 
 async def _on_friend_accepted(event: dict) -> None:
-    with SessionLocal() as db:
+    async with AsyncSessionLocal() as db:
         a, b = event["a"], event["b"]
         for src, dst in ((a, b), (b, a)):
-            src_user = db.get(User, src)
+            src_user = await db.get(User, src)
             if src_user:
                 await push_service.deliver(
                     db,
@@ -72,8 +72,8 @@ async def _on_friend_accepted(event: dict) -> None:
 
 
 async def _on_user_updated(event: dict) -> None:
-    with SessionLocal() as db:
-        u = db.get(User, event["user_id"])
+    async with AsyncSessionLocal() as db:
+        u = await db.get(User, event["user_id"])
         if u:
             search_service.index_user(u)
 
@@ -86,11 +86,14 @@ HANDLERS = {
 }
 
 
-def _friend_ids(db, user_id: int) -> list[int]:
-    rows = db.execute(
-        select(Friendship).where(
-            Friendship.status == FriendshipStatus.ACCEPTED,
-            (Friendship.requester_id == user_id) | (Friendship.addressee_id == user_id),
+async def _friend_ids(db, user_id: int) -> list[int]:
+    rows = (
+        await db.execute(
+            select(Friendship).where(
+                Friendship.status == FriendshipStatus.ACCEPTED,
+                (Friendship.requester_id == user_id)
+                | (Friendship.addressee_id == user_id),
+            )
         )
     ).scalars()
     return [

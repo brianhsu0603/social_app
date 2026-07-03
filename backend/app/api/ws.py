@@ -15,7 +15,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select
 
 from app.api.deps import user_from_token
-from app.core.database import SessionLocal
+from app.core.database import AsyncSessionLocal
 from app.core.redis_client import get_redis
 from app.models import Notification
 from app.services.notification_push import USER_PUSH_CHANNEL
@@ -26,15 +26,14 @@ router = APIRouter(tags=["ws"])
 
 @router.websocket("/ws/user")
 async def user_ws(websocket: WebSocket, token: str) -> None:
-    db = SessionLocal()
-    try:
-        user = user_from_token(token, db)
+    async with AsyncSessionLocal() as db:
+        user = await user_from_token(token, db)
         if not user:
             await websocket.close(code=4401)
             return
         user_id = user.id
         notification_unread = (
-            db.scalar(
+            await db.scalar(
                 select(func.count(Notification.id)).where(
                     Notification.recipient_id == user_id,
                     Notification.read.is_(False),
@@ -42,13 +41,14 @@ async def user_ws(websocket: WebSocket, token: str) -> None:
             )
             or 0
         )
-    finally:
-        db.close()
 
     await websocket.accept()
-    await websocket.send_json(
-        {"type": "init", "notification_unread": notification_unread}
-    )
+    try:
+        await websocket.send_json(
+            {"type": "init", "notification_unread": notification_unread}
+        )
+    except WebSocketDisconnect:
+        return
 
     redis = get_redis()
     pubsub = redis.pubsub()

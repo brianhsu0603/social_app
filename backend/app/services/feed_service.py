@@ -5,7 +5,8 @@ post volume forces a fan-out cache)."""
 import json
 
 from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.redis_client import get_redis
 from app.models import Friendship, FriendshipStatus, Like, Post, Comment
@@ -13,7 +14,7 @@ from app.models import Friendship, FriendshipStatus, Like, Post, Comment
 FRIEND_IDS_CACHE_TTL = 60  # seconds
 
 
-async def get_friend_ids(db: Session, user_id: int) -> list[int]:
+async def get_friend_ids(db: AsyncSession, user_id: int) -> list[int]:
     redis = get_redis()
     cache_key = f"friend_ids:{user_id}"
     cached = await redis.get(cache_key)
@@ -31,7 +32,7 @@ async def get_friend_ids(db: Session, user_id: int) -> list[int]:
             or_(Friendship.requester_id == user_id, Friendship.addressee_id == user_id),
         )
     )
-    ids = [row[0] for row in db.execute(stmt).all()]
+    ids = [row[0] for row in (await db.execute(stmt)).all()]
     await redis.set(cache_key, json.dumps(ids), ex=FRIEND_IDS_CACHE_TTL)
     return ids
 
@@ -43,8 +44,8 @@ async def invalidate_friend_cache(*user_ids: int) -> None:
         await redis.delete(*keys)
 
 
-def fetch_posts(
-    db: Session,
+async def fetch_posts(
+    db: AsyncSession,
     viewer_id: int,
     author_ids: list[int],
     limit: int,
@@ -83,7 +84,7 @@ def fetch_posts(
     if before_id is not None:
         stmt = stmt.where(Post.id < before_id)
 
-    rows = db.execute(stmt).all()
+    rows = (await db.execute(stmt)).all()
     results = []
     # Eager-load authors in one query
     author_ids_seen = {row[0].author_id for row in rows}
@@ -91,7 +92,9 @@ def fetch_posts(
 
     authors = {
         u.id: u
-        for u in db.execute(select(User).where(User.id.in_(author_ids_seen))).scalars()
+        for u in (
+            await db.execute(select(User).where(User.id.in_(author_ids_seen)))
+        ).scalars()
     }
     for post, lc, cc, lbm in rows:
         results.append(

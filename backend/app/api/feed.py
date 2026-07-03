@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -14,10 +14,10 @@ router = APIRouter(prefix="/feed", tags=["feed"])
 async def get_feed(
     limit: int = 20,
     before_id: int | None = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
     # Self + friends — Facebook-style timeline
     friend_ids = await get_friend_ids(db, current.id)
     author_ids = list({current.id, *friend_ids})
-    return fetch_posts(db, current.id, author_ids, min(limit, 50), before_id)
+    return await fetch_posts(db, current.id, author_ids, min(limit, 50), before_id)

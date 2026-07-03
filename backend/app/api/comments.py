@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
@@ -13,24 +13,24 @@ from app.services import notification_push
 router = APIRouter(tags=["comments"])
 
 
-def _to_comment_out(db: Session, comment: Comment) -> dict:
+async def _to_comment_out(db: AsyncSession, comment: Comment) -> dict:
     return {
         "id": comment.id,
         "post_id": comment.post_id,
         "content": comment.content,
         "created_at": comment.created_at,
-        "author": db.get(User, comment.author_id),
+        "author": await db.get(User, comment.author_id),
     }
 
 
 @router.get("/posts/{post_id}/comments", response_model=list[CommentOut])
-def list_comments(
+async def list_comments(
     post_id: int,
     limit: int = 50,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[dict]:
-    if not db.get(Post, post_id):
+    if not await db.get(Post, post_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
     stmt = (
         select(Comment)
@@ -38,7 +38,9 @@ def list_comments(
         .order_by(Comment.id.asc())
         .limit(min(limit, 200))
     )
-    return [_to_comment_out(db, c) for c in db.execute(stmt).scalars()]
+    return [
+        await _to_comment_out(db, c) for c in (await db.execute(stmt)).scalars()
+    ]
 
 
 @router.post(
@@ -49,17 +51,17 @@ def list_comments(
 async def add_comment(
     post_id: int,
     payload: CommentCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    if not db.get(Post, post_id):
+    if not await db.get(Post, post_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "post not found")
     comment = Comment(post_id=post_id, author_id=current.id, content=payload.content)
     db.add(comment)
-    db.commit()
-    db.refresh(comment)
+    await db.commit()
+    await db.refresh(comment)
 
-    post = db.get(Post, post_id)
+    post = await db.get(Post, post_id)
     if post and post.author_id != current.id:
         db.add(
             Notification(
@@ -69,7 +71,7 @@ async def add_comment(
                 post_id=post_id,
             )
         )
-        db.commit()
+        await db.commit()
         await notification_push.push(post.author_id, {"type": "new_notification"})
 
     try:
@@ -86,37 +88,37 @@ async def add_comment(
     except Exception:
         pass  # bus down ≠ write failure; the comment is already saved
 
-    return _to_comment_out(db, comment)
+    return await _to_comment_out(db, comment)
 
 
 @router.patch("/comments/{comment_id}", response_model=CommentOut)
-def update_comment(
+async def update_comment(
     comment_id: int,
     payload: CommentUpdate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    comment = db.get(Comment, comment_id)
+    comment = await db.get(Comment, comment_id)
     if not comment:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "comment not found")
     if comment.author_id != current.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not your comment")
     comment.content = payload.content
-    db.commit()
-    db.refresh(comment)
-    return _to_comment_out(db, comment)
+    await db.commit()
+    await db.refresh(comment)
+    return await _to_comment_out(db, comment)
 
 
 @router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_comment(
+async def delete_comment(
     comment_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> None:
-    comment = db.get(Comment, comment_id)
+    comment = await db.get(Comment, comment_id)
     if not comment:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "comment not found")
     if comment.author_id != current.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "not your comment")
-    db.delete(comment)
-    db.commit()
+    await db.delete(comment)
+    await db.commit()

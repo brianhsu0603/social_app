@@ -1,9 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
@@ -16,20 +15,24 @@ from app.models import User
 from app.core.security import hash_password
 
 # Single in-memory SQLite shared across all connections in the same process
-_engine = create_engine(
-    "sqlite://",
+_engine = create_async_engine(
+    "sqlite+aiosqlite://",
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-_TestSessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
+_TestSessionLocal = async_sessionmaker(
+    bind=_engine, autoflush=False, expire_on_commit=False
+)
 
 
 @pytest.fixture(autouse=True)
-def _tables():
+async def _tables():
     """Create all tables before each test and drop them afterwards for isolation."""
-    Base.metadata.create_all(_engine)
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
-    Base.metadata.drop_all(_engine)
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture(autouse=True)
@@ -43,16 +46,16 @@ def _mock_kafka():
 
 
 @pytest.fixture
-def db():
+async def db():
     session = _TestSessionLocal()
     try:
         yield session
     finally:
-        session.close()
+        await session.close()
 
 
 @pytest.fixture
-def user_a(db):
+async def user_a(db: AsyncSession):
     u = User(
         email="alice@example.com",
         username="alice",
@@ -60,13 +63,13 @@ def user_a(db):
         password_hash=hash_password("secret"),
     )
     db.add(u)
-    db.commit()
-    db.refresh(u)
+    await db.commit()
+    await db.refresh(u)
     return u
 
 
 @pytest.fixture
-def user_b(db):
+async def user_b(db: AsyncSession):
     u = User(
         email="bob@example.com",
         username="bob",
@@ -74,29 +77,33 @@ def user_b(db):
         password_hash=hash_password("secret"),
     )
     db.add(u)
-    db.commit()
-    db.refresh(u)
+    await db.commit()
+    await db.refresh(u)
     return u
 
 
 @pytest.fixture
-def make_client(db):
-    """Factory that returns a TestClient authenticated as the given user."""
+def make_client(db: AsyncSession):
+    """Factory that returns an AsyncClient authenticated as the given user."""
 
-    def _make(user: User) -> TestClient:
+    def _make(user: User) -> AsyncClient:
         _app = FastAPI()
         _app.include_router(posts_api.router)
         _app.include_router(comments_api.router)
         _app.include_router(likes_api.router)
         _app.include_router(notifications_api.router)
-        _app.dependency_overrides[get_db] = lambda: db
+
+        async def _override_get_db():
+            yield db
+
+        _app.dependency_overrides[get_db] = _override_get_db
         _app.dependency_overrides[get_current_user] = lambda: user
-        return TestClient(_app, raise_server_exceptions=True)
+        return AsyncClient(transport=ASGITransport(app=_app), base_url="http://test")
 
     return _make
 
 
 @pytest.fixture
 def client(make_client, user_a):
-    """Default TestClient authenticated as user_a (alice)."""
+    """Default AsyncClient authenticated as user_a (alice)."""
     return make_client(user_a)

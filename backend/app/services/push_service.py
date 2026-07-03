@@ -11,7 +11,8 @@ import os
 from typing import Iterable
 
 import httpx
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Device
 
@@ -22,13 +23,17 @@ APNS_ENDPOINT = "https://api.push.apple.com/3/device/{token}"
 
 
 async def deliver(
-    db: Session,
+    db: AsyncSession,
     user_ids: Iterable[int],
     title: str,
     body: str,
     data: dict | None = None,
 ) -> int:
-    devices = list(db.query(Device).filter(Device.user_id.in_(list(user_ids))).all())
+    devices = list(
+        (
+            await db.execute(select(Device).where(Device.user_id.in_(list(user_ids))))
+        ).scalars()
+    )
     if not devices:
         return 0
 

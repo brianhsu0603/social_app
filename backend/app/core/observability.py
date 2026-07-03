@@ -99,5 +99,7 @@ def install_tracing(app: FastAPI) -> None:
     RedisInstrumentor().instrument()
     from app.core.database import engine
 
-    SQLAlchemyInstrumentor().instrument(engine=engine)
+    # SQLAlchemyInstrumentor hooks core engine events, which AsyncEngine doesn't
+    # support directly — instrument the underlying sync engine it wraps instead.
+    SQLAlchemyInstrumentor().instrument(engine=engine.sync_engine)
     log.info("tracing enabled, exporting to %s", endpoint)

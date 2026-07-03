@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -11,16 +11,18 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 @router.get("", response_model=NotificationListOut)
-def list_notifications(
-    db: Session = Depends(get_db),
+async def list_notifications(
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> NotificationListOut:
     rows = (
-        db.execute(
-            select(Notification)
-            .where(Notification.recipient_id == current.id)
-            .order_by(Notification.id.desc())
-            .limit(50)
+        (
+            await db.execute(
+                select(Notification)
+                .where(Notification.recipient_id == current.id)
+                .order_by(Notification.id.desc())
+                .limit(50)
+            )
         )
         .scalars()
         .all()
@@ -28,7 +30,7 @@ def list_notifications(
 
     items = []
     for n in rows:
-        actor = db.get(User, n.actor_id)
+        actor = await db.get(User, n.actor_id)
         if actor:
             items.append(
                 NotificationOut(
@@ -46,26 +48,26 @@ def list_notifications(
 
 
 @router.patch("/{notification_id}/read", status_code=204)
-def mark_one_read(
+async def mark_one_read(
     notification_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> None:
-    n = db.get(Notification, notification_id)
+    n = await db.get(Notification, notification_id)
     if not n or n.recipient_id != current.id:
         return
     n.read = True
-    db.commit()
+    await db.commit()
 
 
 @router.post("/read-all", status_code=204)
-def mark_all_read(
-    db: Session = Depends(get_db),
+async def mark_all_read(
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> None:
-    db.execute(
+    await db.execute(
         update(Notification)
         .where(Notification.recipient_id == current.id, Notification.read == False)
         .values(read=True)
     )
-    db.commit()
+    await db.commit()

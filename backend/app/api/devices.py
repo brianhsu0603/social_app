@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -17,38 +17,38 @@ class DeviceRegister(BaseModel):
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def register_device(
+async def register_device(
     payload: DeviceRegister,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
     # Idempotent: if the token already exists, just reattach it to the caller.
-    existing = db.execute(
-        select(Device).where(Device.token == payload.token)
+    existing = (
+        await db.execute(select(Device).where(Device.token == payload.token))
     ).scalar_one_or_none()
     if existing:
         existing.user_id = current.id
         existing.platform = payload.platform
-        db.commit()
+        await db.commit()
         return {"id": existing.id}
 
     d = Device(user_id=current.id, platform=payload.platform, token=payload.token)
     db.add(d)
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
-    db.refresh(d)
+        await db.rollback()
+    await db.refresh(d)
     return {"id": d.id}
 
 
 @router.delete("/{token}", status_code=status.HTTP_204_NO_CONTENT)
-def unregister_device(
+async def unregister_device(
     token: str,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> None:
-    db.query(Device).filter(
-        Device.user_id == current.id, Device.token == token
-    ).delete()
-    db.commit()
+    await db.execute(
+        delete(Device).where(Device.user_id == current.id, Device.token == token)
+    )
+    await db.commit()
