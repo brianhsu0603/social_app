@@ -38,9 +38,7 @@ async def list_comments(
         .order_by(Comment.id.asc())
         .limit(min(limit, 200))
     )
-    return [
-        await _to_comment_out(db, c) for c in (await db.execute(stmt)).scalars()
-    ]
+    return [await _to_comment_out(db, c) for c in (await db.execute(stmt)).scalars()]
 
 
 @router.post(

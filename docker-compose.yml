@@ -120,7 +120,7 @@ services:
       postgres: { condition: service_healthy }
       mongo: { condition: service_started }
       redis: { condition: service_started }
-      kafka: { condition: service_started }
+      kafka: { condition: service_healthy }
       minio: { condition: service_started }
       meilisearch: { condition: service_started }
     ports: ["8000:8000"]

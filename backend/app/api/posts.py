@@ -1,13 +1,15 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.kafka_client import publish
-from app.core.config import settings
-from app.models import Post, PostMedia, Like, Comment, User
+from app.models import Comment, Like, Post, PostMedia, User
 from app.schemas.post import PostCreate, PostOut, PostUpdate
 
 router = APIRouter(prefix="/posts", tags=["posts"])
@@ -52,15 +54,20 @@ async def create_post(
     await db.commit()
     await db.refresh(post)
 
-    # Fire-and-forget event for downstream consumers (notifications, fan-out, analytics)
+    # Fire-and-forget event for downstream consumers (notifications, fan-out, analytics).
+    # Bounded with wait_for: aiokafka's idempotent producer retries retriable errors
+    # forever with no attempt cap, so an unhealthy broker can hang this await indefinitely
+    # otherwise — defeating the "never fail the write because the bus is down" intent.
     try:
-        await publish(
-            settings.kafka_events_topic,
-            {"type": "post.created", "post_id": post.id, "author_id": current.id},
-            key=str(current.id),
+        await asyncio.wait_for(
+            publish(
+                settings.kafka_events_topic,
+                {"type": "post.created", "post_id": post.id, "author_id": current.id},
+                key=str(current.id),
+            ),
+            timeout=5.0,
         )
     except Exception:
-        # Kafka is best-effort here; never fail the write because the bus is down.
         pass
 
     return {

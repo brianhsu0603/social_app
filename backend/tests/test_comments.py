@@ -81,9 +81,7 @@ class TestAddComment:
 
     async def test_empty_content_rejected(self, client):
         post = await _create_post(client)
-        r = await client.post(
-            f"/posts/{post['id']}/comments", json={"content": ""}
-        )
+        r = await client.post(f"/posts/{post['id']}/comments", json={"content": ""})
         assert r.status_code == 422
 
     async def test_content_over_2000_chars_rejected(self, client):

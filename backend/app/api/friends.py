@@ -117,9 +117,7 @@ async def incoming_requests(
         Friendship.addressee_id == current.id,
         Friendship.status == FriendshipStatus.PENDING,
     )
-    return [
-        await _to_friendship_out(db, f) for f in (await db.execute(stmt)).scalars()
-    ]
+    return [await _to_friendship_out(db, f) for f in (await db.execute(stmt)).scalars()]
 
 
 @router.get("", response_model=list[UserPublic])
@@ -130,6 +128,4 @@ async def list_friends(
     ids = await get_friend_ids(db, current.id)
     if not ids:
         return []
-    return list(
-        (await db.execute(select(User).where(User.id.in_(ids)))).scalars()
-    )
+    return list((await db.execute(select(User).where(User.id.in_(ids)))).scalars())

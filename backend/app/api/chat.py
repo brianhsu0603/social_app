@@ -199,7 +199,7 @@ async def chat_ws(websocket: WebSocket, room_id: int, token: str) -> None:
                 media_type=payload.get("media_type"),
             )
             await read_receipt_service.mark_read(room_id, user.id, msg["id"])
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception:
         log.exception("ws error")
@@ -231,7 +231,11 @@ async def _subscribe_typing(
                         continue
                 except Exception:
                     continue
-                await ws.send_json({"type": "typing", **payload})
+                try:
+                    await ws.send_json({"type": "typing", **payload})
+                except (WebSocketDisconnect, RuntimeError):
+                    stop_event.set()
+                    break
     finally:
         await pubsub.unsubscribe()
         await pubsub.close()
