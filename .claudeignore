@@ -64,8 +64,15 @@ secrets/
 
 # Git
 .git/
-.github/
 
 # Kubernetes generated/runtime state (keep manifests, skip dumps)
 k8s/debug/
 k8s/*.bak
+
+# Terraform generated/runtime state (can contain real secrets in plaintext)
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
