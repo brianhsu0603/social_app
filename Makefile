@@ -28,9 +28,6 @@ logs:
 
 lint: lint-backend lint-frontend
 
-# ruff isn't in requirements.txt / the backend image (CI installs it on the
-# runner via `pip install ruff`); run it the same way here against the host
-# checkout. Install once with: pip install ruff
 lint-backend:
 	ruff check backend/
 	ruff format --check backend/
