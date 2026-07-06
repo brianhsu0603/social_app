@@ -1,18 +1,18 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+from app.api import comments as comments_api
+from app.api import likes as likes_api
+from app.api import notifications as notifications_api
+from app.api import posts as posts_api
+from app.api.deps import get_current_user
+from app.core.database import Base, get_db
+from app.core.security import hash_password
+from app.models import User
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-
-from app.core.database import Base, get_db
-from app.api.deps import get_current_user
-from app.api import posts as posts_api
-from app.api import comments as comments_api
-from app.api import likes as likes_api
-from app.api import notifications as notifications_api
-from app.models import User
-from app.core.security import hash_password
 
 # Single in-memory SQLite shared across all connections in the same process
 _engine = create_async_engine(

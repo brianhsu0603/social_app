@@ -1,8 +1,7 @@
 import pytest
-from pydantic import ValidationError
-
 from app.schemas.auth import RegisterIn
 from app.schemas.post import MediaIn, PostCreate
+from pydantic import ValidationError
 
 
 def test_register_validation() -> None:

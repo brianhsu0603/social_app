@@ -67,7 +67,7 @@ async def mark_all_read(
 ) -> None:
     await db.execute(
         update(Notification)
-        .where(Notification.recipient_id == current.id, Notification.read == False)
+        .where(Notification.recipient_id == current.id, not Notification.read)
         .values(read=True)
     )
     await db.commit()

@@ -1,7 +1,5 @@
-import pytest
-from sqlalchemy import select
-
 from app.models import Notification
+from sqlalchemy import select
 
 # ---------------------------------------------------------------------------
 # Helpers
